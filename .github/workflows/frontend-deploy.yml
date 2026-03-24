@@ -14,8 +14,8 @@ on:
 
 env:
   NODE_VERSION: '18'
-  S3_BUCKET: healthcare-frontend-bucket
-  CF_DISTRIBUTION_ID: EXXXXXXXXXXXXX
+  S3_BUCKET: healthcare-frontend-20260320
+  CF_DISTRIBUTION_ID: EPEVX2WI608CA
 
 jobs:
   test:

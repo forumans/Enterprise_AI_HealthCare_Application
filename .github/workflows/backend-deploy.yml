@@ -93,17 +93,18 @@ jobs:
     - name: Fill in the new image ID in the Amazon ECS task definition
       id: task-def
       run: |
-        sed -i 's|ACCOUNT-ID.dkr.ecr.us-east-1.amazonaws.com/healthcare-backend:latest|${{ steps.build-image.outputs.image }}|' $ECS_TASK_DEFINITION
+        sed -i 's|"image": ".*healthcare-backend:.*"|"image": "${{ steps.build-image.outputs.image }}"|' $ECS_TASK_DEFINITION
         cat $ECS_TASK_DEFINITION
         
     - name: Register Amazon ECS task definition
       id: register-task-def
       run: |
-        aws ecs register-task-definition --cli-input-json file://$ECS_TASK_DEFINITION
+        TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json file://$ECS_TASK_DEFINITION --query 'taskDefinition.taskDefinitionArn' --output text)
+        echo "task_def_arn=$TASK_DEF_ARN" >> $GITHUB_OUTPUT
         
     - name: Deploy to Amazon ECS
       run: |
-        aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_SERVICE --force-new-deployment
+        aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_SERVICE --task-definition ${{ steps.register-task-def.outputs.task_def_arn }} --force-new-deployment
         
     - name: Wait for deployment to complete
       run: |

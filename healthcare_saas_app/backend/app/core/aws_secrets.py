@@ -19,7 +19,7 @@ class AWSSecretsManager:
         self.client = None
         self._cache = {}
         self._cache_ttl = 300  # 5 minutes
-        self._enabled = os.getenv("AWS_SECRETS_MANAGER_ENABLED", "false").lower() == "true"
+        self._enabled = os.getenv("AWS_SECRETS_MANAGER_ENABLED").lower() == "true"
         
         if self._enabled:
             try:

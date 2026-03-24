@@ -58,7 +58,6 @@ copy .env.example .env
 # Windows:
 echo "# Database Configuration" > .env
 echo "DATABASE_URL=postgresql+asyncpg://<your_postgres_username>:<your_postgres_password>@localhost:5432/healthcare_sas" >> .env
-echo "TEST_DATABASE_URL=postgresql+asyncpg://<your_postgres_username>:<your_postgres_password>@localhost/test_healthcare_db" >> .env
 echo "" >> .env
 echo "# CORS Configuration" >> .env
 echo "CORS_ORIGINS=http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:5174,http://localhost:5174" >> .env
@@ -71,7 +70,6 @@ echo "JWT_ALGORITHM=HS256" >> .env
 cat > .env << EOF
 # Database Configuration
 DATABASE_URL=postgresql+asyncpg://<your_postgres_username>:<your_postgres_password>@localhost:5432/healthcare_sas
-TEST_DATABASE_URL=postgresql+asyncpg://<your_postgres_username>:<your_postgres_password>@localhost/test_healthcare_db
 
 # CORS Configuration
 CORS_ORIGINS=http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:5174,http://localhost:5174
@@ -121,7 +119,6 @@ asyncio.run(test_connection())
 # Edit the .env file in the project root to set your database and other configurations
 # The .env file contains:
 #   DATABASE_URL=postgresql+asyncpg://your_username:your_password@localhost/healthcare_saas
-#   TEST_DATABASE_URL=postgresql+asyncpg://your_username:your_password@localhost/test_healthcare_db
 #   CORS_ORIGINS=http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:5174,http://localhost:5174
 #   JWT_SECRET=change-me-in-production
 #   JWT_ALGORITHM=HS256

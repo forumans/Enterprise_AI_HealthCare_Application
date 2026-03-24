@@ -43,7 +43,7 @@ jobs:
       run: |
         cd healthcare_saas_app/backend
         pip install -r requirements.txt
-        pip install pytest pytest-asyncio httpx
+        pip install pytest pytest-asyncio pytest-cov httpx
         
     - name: Run tests
       run: |

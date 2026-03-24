@@ -22,18 +22,10 @@ test_healthcare_saas_app/
       login-ui-backend.integration.spec.ts
     e2e/
       admin-dashboard-metrics.e2e.spec.ts
-    legacy/
-      *.spec.ts
-      fixtures.ts
-      helpers.ts
-      storage-states.ts
-      global-setup.ts
-      global-teardown.ts
 ```
 
 ## Notes
 
-- `tests/legacy/` is retained for historical reference and not part of active suites.
 - Active Playwright projects are defined in `playwright.config.ts` as:
   - `integration`
   - `e2e`

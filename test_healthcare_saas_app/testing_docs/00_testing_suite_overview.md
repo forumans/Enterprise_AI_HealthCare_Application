@@ -23,8 +23,6 @@ This document is the canonical testing strategy for the current codebase and sup
   - `login-ui-backend.integration.spec.ts`
 - `test_healthcare_saas_app/tests/e2e/`
   - `admin-dashboard-metrics.e2e.spec.ts`
-- `test_healthcare_saas_app/tests/legacy/`
-  - previous Playwright suite archived for reference
 
 ## Single Entry Point for Running Tests
 

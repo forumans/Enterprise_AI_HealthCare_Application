@@ -8,17 +8,26 @@ from __future__ import annotations
 
 import asyncio
 import os
+from pathlib import Path
 from typing import Final
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
-DEFAULT_DB_URL: Final[str] = "postgresql+asyncpg://test_user:password@localhost/test_healthcare_db"
-
 
 def get_database_url() -> str:
-    """Read database URL from environment with a local fallback."""
-    return os.getenv("DATABASE_URL", DEFAULT_DB_URL)
+    """Read TEST_DATABASE_URL from .env.test file."""
+    env_test_path = Path(__file__).parent.parent / ".env.test"
+    if not env_test_path.exists():
+        raise FileNotFoundError(f".env.test file not found at {env_test_path}")
+    
+    with open(env_test_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith('TEST_DATABASE_URL='):
+                return line.split('=', 1)[1].strip()
+    
+    raise ValueError("TEST_DATABASE_URL not found in .env.test file")
 
 
 def redact_db_url(db_url: str) -> str:
@@ -42,7 +51,7 @@ def redact_db_url(db_url: str) -> str:
 async def test_db_connection() -> bool:
     """Attempt a lightweight query and return success/failure."""
     database_url = get_database_url()
-    print(f"Using DATABASE_URL: {redact_db_url(database_url)}")
+    print(f"Using TEST_DATABASE_URL: {redact_db_url(database_url)}")
 
     engine = create_async_engine(database_url, pool_pre_ping=True)
 

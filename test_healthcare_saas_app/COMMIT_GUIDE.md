@@ -26,7 +26,6 @@ This guide covers commits related to:
 - `test_healthcare_saas_app/playwright.config.ts`
 - `test_healthcare_saas_app/tests/integration/*`
 - `test_healthcare_saas_app/tests/e2e/*`
-- `test_healthcare_saas_app/tests/legacy/*` (moves/archives)
 - `test_healthcare_saas_app/PROJECT_STRUCTURE.md`
 
 ### Testing docs
@@ -49,6 +48,5 @@ test: restructure suites into unit/integration/e2e with updated docs
 - Add backend unit coverage for auth login and appointment metrics
 - Add frontend unit coverage for system dashboard stats mapping
 - Reorganize test_healthcare_saas_app into integration + e2e projects
-- Archive legacy Playwright tests under tests/legacy
 - Update testing specifications under test_healthcare_saas_app/testing_docs
 ```

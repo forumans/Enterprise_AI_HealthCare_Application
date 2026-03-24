@@ -19,8 +19,20 @@
       "essential": true,
       "environment": [
         {
+          "name": "APP_ENV",
+          "value": "production"
+        },
+        {
           "name": "ENVIRONMENT",
           "value": "production"
+        },
+        {
+          "name": "JWT_ALGORITHM",
+          "value": "HS256"
+        },
+        {
+          "name": "ACCESS_TOKEN_MINUTES",
+          "value": "30"
         },
         {
           "name": "HOST",

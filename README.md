@@ -6,7 +6,7 @@ Specification-driven development is a methodology where applications are built f
 
 ## Project URL on AWS
 
-Visit [HealthCare SaaS Application] (https://d38vpnbis6nxp0.cloudfront.net)
+[HealthCare SaaS Application](https://d38vpnbis6nxp0.cloudfront.net)
 
 # Credentials to login to the portal:
  - You can reach me to get the credentials

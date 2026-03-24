@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.dependencies import CurrentIdentity, get_current_identity, require_roles
 from ...core.database import get_db
-from ...models import Appointment, MedicalRecord, Patient, Prescription, User
+from ...models import Appointment, MedicalRecord, Patient, Prescription, User, Doctor
 from ...services.audit_service import write_audit_log
 
 router = APIRouter(prefix="/patients")
@@ -166,7 +166,7 @@ async def get_all_patient_prescriptions(
 ) -> list[dict]:
     """Get all prescriptions for a specific patient"""
     stmt = (
-        select(Patient, Appointment, MedicalRecord, Prescription)
+        select(Patient, Appointment, MedicalRecord, Prescription, Doctor)
         .join(
             Appointment,
             and_(
@@ -194,6 +194,15 @@ async def get_all_patient_prescriptions(
             ),
             isouter=True,
         )
+        .join(
+            Doctor,
+            and_(
+                Doctor.id == Appointment.doctor_id,
+                Doctor.tenant_id == identity.tenant_id,
+                Doctor.deleted_at.is_(None),
+            ),
+            isouter=True,
+        )
         .where(
             Patient.tenant_id == identity.tenant_id,
             Patient.deleted_at.is_(None),
@@ -211,6 +220,7 @@ async def get_all_patient_prescriptions(
             "lab_results": medical_record.lab_results if medical_record else "",
             "medication": prescription.medication_details if prescription else "",
             "prescription_date": appointment.appointment_time.isoformat() if appointment else "",
+            "doctor_name": f"{doctor.full_name if doctor else ''} {doctor.specialty if doctor else ''}".strip() if doctor else "Unknown",
         }
-        for patient, appointment, medical_record, prescription in rows
+        for patient, appointment, medical_record, prescription, doctor in rows
     ]

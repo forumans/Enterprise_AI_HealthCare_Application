@@ -172,11 +172,44 @@ async def patient_prescriptions(
 
 @router.get("/prescriptions-full")
 async def patient_prescriptions_full(
-    identity: CurrentIdentity = Depends(require_roles("PATIENT")),
+    patient_id: str | None = None,
+    identity: CurrentIdentity = Depends(require_roles("PATIENT", "DOCTOR")),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    """Get complete patient prescription data using custom SQL query"""
-    patient = await _current_patient(identity, db)
+    """Get complete patient prescription data using custom SQL query
+    
+    For PATIENT role: Returns their own prescriptions
+    For DOCTOR role: Returns prescriptions for specified patient_id
+    """
+    print(f"DEBUG: prescriptions-full called - role: {identity.role}, patient_id: {patient_id}")
+    
+    if identity.role == "PATIENT":
+        # Patients can only access their own data
+        patient = await _current_patient(identity, db)
+    elif identity.role == "DOCTOR":
+        # Doctors can access any patient's data if patient_id is provided
+        if not patient_id:
+            raise HTTPException(status_code=400, detail="patient_id is required for doctors")
+        
+        from ...models import Patient
+        patient = (
+            await db.execute(
+                select(Patient).where(
+                    and_(
+                        Patient.id == patient_id,
+                        Patient.tenant_id == identity.tenant_id,
+                        Patient.deleted_at.is_(None),
+                    )
+                )
+            )
+        ).scalar_one_or_none()
+        
+        if not patient:
+            raise HTTPException(status_code=404, detail="Patient not found")
+    else:
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    
+    print(f"DEBUG: Found patient: {patient.id} - {patient.full_name}")
     
     # Execute the complete SQL query with all JOINs
     query = text("""
@@ -204,6 +237,7 @@ async def patient_prescriptions_full(
     """)
     
     result = await db.execute(query, {"patient_id": patient.id})
+    print(f"DEBUG: SQL query returned {result.rowcount} rows")
     
     prescriptions = []
     for row in result:
@@ -219,6 +253,10 @@ async def patient_prescriptions_full(
             "pharmacy_name": row.pharmacy_name or "",
             "appointment_created_at": row.appointment_created_at.isoformat() if row.appointment_created_at else None
         })
+    
+    if prescriptions:
+        print(f"DEBUG: First prescription doctor_name: '{prescriptions[0]['doctor_name']}'")
+        print(f"DEBUG: First prescription data: {prescriptions[0]}")
     
     return prescriptions
 

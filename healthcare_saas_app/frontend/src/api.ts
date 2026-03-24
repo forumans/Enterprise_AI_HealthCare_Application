@@ -217,9 +217,13 @@ export const api = {
     });
   },
 
-  patientPrescriptionsFull: (token?: string) => {
+  patientPrescriptionsFull: (token?: string, patientId?: string) => {
     debugLog('API: Making patientPrescriptionsFull call to /patient/prescriptions-full');
     debugLog('API: Token available:', !!token);
+    debugLog('API: PatientId provided:', !!patientId);
+    
+    const url = patientId ? `/patient/prescriptions-full?patient_id=${patientId}` : '/patient/prescriptions-full';
+    
     return request<Array<{
       appointment_time: string;
       doctor_name: string;
@@ -231,7 +235,7 @@ export const api = {
       medication_details: string;
       pharmacy_name: string;
       appointment_created_at: string;
-    }>>('/patient/prescriptions-full', {
+    }>>(url, {
       method: "GET",
       headers: withAuth(token || ''),
     }).then(response => {

@@ -67,14 +67,6 @@ function DoctorDetails({ session, auth }: { session: SessionState; auth: any }) 
 
 // PatientSearchResults component
 function PatientSearchResults({ rows, session }: { rows: PatientSearchRow[]; session: SessionState }) {
-  // Debug: Log the first row to see what data we're getting
-  useEffect(() => {
-    if (rows.length > 0) {
-      console.log("DEBUG - Frontend received first patient:", rows[0]);
-      console.log("DEBUG - DOB:", rows[0].dob, "Gender:", rows[0].gender);
-    }
-  }, [rows]);
-
   function calculateAge(dob: string): number {
     if (!dob) return 0; // Return 0 if no DOB
     
@@ -137,55 +129,63 @@ function PatientSearchResults({ rows, session }: { rows: PatientSearchRow[]; ses
   const [loadingMore, setLoadingMore] = useState(false);
   const [showMore, setShowMore] = useState(false);
 
-  // Filter rows to show only the selected patient's prescriptions
+  // Filter rows to show only the selected patient's prescriptions (loaded from unified API)
   const allFilteredRows = selectedPatientId 
-    ? rows
-        .filter(row => row.id === selectedPatientId)
-        .sort((a, b) => {
-          // Sort by prescription date descending (newest first)
-          if (!a.prescription_date) return 1;
-          if (!b.prescription_date) return -1;
-          return new Date(b.prescription_date).getTime() - new Date(a.prescription_date).getTime();
-        })
+    ? rows.filter(row => row.id === selectedPatientId) // Only show prescriptions that were loaded from unified API
     : [];
 
-  // Combine original rows with additional prescriptions if "View More" was clicked
-  const combinedRows = showMore && additionalPrescriptions.length > 0
-    ? [...allFilteredRows, ...additionalPrescriptions]
-    : allFilteredRows;
-
-  // Show only first 5 initially, or all if "View More" was clicked
-  const displayRows = showMore 
-    ? combinedRows 
-    : combinedRows.slice(0, 5);
+  // Show loaded prescriptions only if they exist
+  const displayRows = showMore && additionalPrescriptions.length > 0
+    ? additionalPrescriptions // Show complete prescription data loaded from unified API
+    : []; // Show nothing until prescriptions are loaded
 
   // Check if patient has more than 5 prescriptions
   const hasMorePrescriptions = selectedPatientId 
     ? allFilteredRows.length > 5
     : false;
 
-  // Auto-select first patient when results change
+  // Auto-select first patient when results change and load their prescriptions
   useEffect(() => {
-    if (uniquePatients.length > 0 && (!selectedPatientId || !uniquePatients.find(p => p.id === selectedPatientId))) {
+    if (uniquePatients.length > 0 && !selectedPatientId) {
       setSelectedPatientId(uniquePatients[0].id);
-      setShowMore(false);
-      setAdditionalPrescriptions([]);
+      // Automatically load prescriptions for the first patient
+      loadPrescriptionsForPatient(uniquePatients[0].id);
     }
   }, [uniquePatients, selectedPatientId]);
 
-  // Handle loading more prescriptions
-  const handleLoadMorePrescriptions = async () => {
-    if (!selectedPatientId || !session.accessToken) return;
+  // Function to load prescriptions for a specific patient
+  const loadPrescriptionsForPatient = async (patientId: string) => {
+    if (!session.accessToken) return;
     
     setLoadingMore(true);
+    
     try {
-      const allPrescriptions = await api.getAllPatientPrescriptions(session.accessToken, selectedPatientId);
-      // Get prescriptions beyond the first 5
-      const morePrescriptions = allPrescriptions.slice(5);
-      setAdditionalPrescriptions(morePrescriptions);
+      const allPrescriptions = await api.patientPrescriptionsFull(session.accessToken, patientId);
+      
+      // Convert the prescription data to match our existing structure
+      const convertedPrescriptions = allPrescriptions.map(p => ({
+        id: patientId,
+        name: uniquePatients.find(p => p.id === patientId)?.name || 'Unknown',
+        phone: uniquePatients.find(p => p.id === patientId)?.phone || '',
+        dob: uniquePatients.find(p => p.id === patientId)?.dob || '',
+        gender: uniquePatients.find(p => p.id === patientId)?.gender || '',
+        address: uniquePatients.find(p => p.id === patientId)?.address || '',
+        symptoms: p.symptoms,
+        diagnosis: p.diagnosis,
+        lab_results: p.lab_results,
+        medication: p.medication_details,
+        prescription_date: p.appointment_time,
+        doctor_name: p.doctor_name,
+        pharmacy_name: p.pharmacy_name,
+        appointment_status: p.appointment_status,
+        appointment_note: p.appointment_note,
+      }));
+      
+      // Store the complete prescription data in additionalPrescriptions
+      setAdditionalPrescriptions(convertedPrescriptions);
       setShowMore(true);
     } catch (error) {
-      console.error("Error loading more prescriptions:", error);
+      console.error("Error loading prescriptions:", error);
     } finally {
       setLoadingMore(false);
     }
@@ -209,6 +209,8 @@ function PatientSearchResults({ rows, session }: { rows: PatientSearchRow[]; ses
                     setSelectedPatientId(patient.id);
                     setShowMore(false);
                     setAdditionalPrescriptions([]);
+                    // Load prescriptions for this patient
+                    loadPrescriptionsForPatient(patient.id);
                   }}
                   style={{
                     background: 'none',
@@ -256,63 +258,84 @@ function PatientSearchResults({ rows, session }: { rows: PatientSearchRow[]; ses
         </div>
       )}
       
-      {rows.length === 0 ? (
-        <p style={{ color: '#94a3b8', textAlign: 'center', padding: '40px' }}>No records found.</p>
+      {displayRows.length === 0 && selectedPatientId && !loadingMore ? (
+        <p style={{ color: '#94a3b8', textAlign: 'center', padding: '40px' }}>
+          No prescription records found for {selectedPatient?.name || 'this patient'}.
+        </p>
+      ) : displayRows.length === 0 && selectedPatientId && loadingMore ? (
+        <p style={{ color: '#94a3b8', textAlign: 'center', padding: '40px' }}>
+          Loading prescription records...
+        </p>
+      ) : displayRows.length === 0 ? (
+        <p style={{ color: '#94a3b8', textAlign: 'center', padding: '40px' }}>
+          Select a patient to view their prescription records.
+        </p>
       ) : (
         <div style={{ overflowX: 'auto' }}>
           <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: '14px' }}>
             <thead>
               <tr>
                 <th style={{ padding: '12px', textAlign: 'left', backgroundColor: '#1e293b', color: '#eef8ff', borderBottom: '1px solid #334155' }}>PRESCRIPTION DATE</th>
+                <th style={{ padding: '12px', textAlign: 'left', backgroundColor: '#1e293b', color: '#eef8ff', borderBottom: '1px solid #334155' }}>DOCTOR</th>
+                <th style={{ padding: '12px', textAlign: 'left', backgroundColor: '#1e293b', color: '#eef8ff', borderBottom: '1px solid #334155' }}>NOTES</th>
                 <th style={{ padding: '12px', textAlign: 'left', backgroundColor: '#1e293b', color: '#eef8ff', borderBottom: '1px solid #334155' }}>SYMPTOMS</th>
                 <th style={{ padding: '12px', textAlign: 'left', backgroundColor: '#1e293b', color: '#eef8ff', borderBottom: '1px solid #334155' }}>DIAGNOSIS</th>
                 <th style={{ padding: '12px', textAlign: 'left', backgroundColor: '#1e293b', color: '#eef8ff', borderBottom: '1px solid #334155' }}>LAB RESULTS</th>
                 <th style={{ padding: '12px', textAlign: 'left', backgroundColor: '#1e293b', color: '#eef8ff', borderBottom: '1px solid #334155' }}>MEDICATION</th>
+                <th style={{ padding: '12px', textAlign: 'left', backgroundColor: '#1e293b', color: '#eef8ff', borderBottom: '1px solid #334155' }}>PHARMACY</th>
               </tr>
             </thead>
             <tbody>
               {displayRows.map((row, index) => (
                 <tr key={`${row.id}-${row.prescription_date}-${index}`} style={{ backgroundColor: index % 2 === 0 ? 'transparent' : 'rgba(30, 41, 59, 0.5)' }}>
                   <td style={{ padding: '12px', color: '#eef8ff', borderBottom: '1px solid #334155' }}>
-                    {row.prescription_date ? new Date(row.prescription_date).toLocaleDateString() : '-'}
+                    {row.prescription_date ? (
+                      <div>
+                        <div>{new Date(row.prescription_date).toLocaleDateString('en-US', { 
+                          year: 'numeric',
+                          month: 'short', 
+                          day: 'numeric'
+                        })}</div>
+                        <div style={{ fontSize: '12px', color: '#b4cce2' }}>
+                          {new Date(row.prescription_date).toLocaleTimeString('en-US', { 
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })}
+                      </div>
+                    </div>
+                  ) : '-'}
+                </td>
+                <td style={{ padding: '12px', color: '#eef8ff', borderBottom: '1px solid #334155' }}>
+                    {row.doctor_name || 'Unknown'}
+                  </td>
+                  <td style={{ padding: '12px', color: '#eef8ff', borderBottom: '1px solid #334155' }}>
+                    {(row as any).appointment_note || '-'}
                   </td>
                   <td style={{ padding: '12px', color: '#eef8ff', borderBottom: '1px solid #334155' }}>
                     {row.symptoms || '-'}
                   </td>
-                  <td style={{ padding: '12px', color: '#eef8ff', borderBottom: '1px solid #334155' }}>
-                    {row.diagnosis || '-'}
-                  </td>
-                  <td style={{ padding: '12px', color: '#eef8ff', borderBottom: '1px solid #334155' }}>
-                    {row.lab_results || '-'}
-                  </td>
-                  <td style={{ padding: '12px', color: '#eef8ff', borderBottom: '1px solid #334155' }}>
-                    {row.medication || '-'}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+                <td style={{ padding: '12px', color: '#eef8ff', borderBottom: '1px solid #334155' }}>
+                  {row.diagnosis || '-'}
+                </td>
+                <td style={{ padding: '12px', color: '#eef8ff', borderBottom: '1px solid #334155' }}>
+                  {row.lab_results || '-'}
+                </td>
+                <td style={{ padding: '12px', color: '#eef8ff', borderBottom: '1px solid #334155' }}>
+                  {row.medication || '-'}
+                </td>
+                <td style={{ padding: '12px', color: '#eef8ff', borderBottom: '1px solid #334155' }}>
+                  {(row as any).pharmacy_name || '-'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    )}
 
-      {/* View More Prescriptions Link */}
-      {hasMorePrescriptions && !showMore && (
+      {loadingMore && (
         <div style={{ marginTop: '16px', textAlign: 'center' }}>
-          <button
-            onClick={handleLoadMorePrescriptions}
-            disabled={loadingMore}
-            style={{
-              background: loadingMore ? '#94a3b8' : '#42b5f5',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              padding: '8px 16px',
-              cursor: loadingMore ? 'not-allowed' : 'pointer',
-              fontSize: '13px'
-            }}
-          >
-            {loadingMore ? 'Loading...' : `View More Prescriptions for ${selectedPatient?.name || 'Patient'}`}
-          </button>
+          <span style={{ color: '#eef8ff', fontSize: '13px' }}>Loading prescription data...</span>
         </div>
       )}
     </div>

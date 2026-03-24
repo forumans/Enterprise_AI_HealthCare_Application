@@ -19,6 +19,7 @@ export function PatientAppointmentsPage({ auth, appointments, userData }: Patien
   const [loading, setLoading] = useState(false);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [patientDetails, setPatientDetails] = useState<any>(null);
+  const [showAllPastAppointments, setShowAllPastAppointments] = useState(false);
   
   // Booking functionality state
   const [doctors, setDoctors] = useState<Array<{ id: string; name: string; specialty?: string; license_number?: string }>>([]);
@@ -105,7 +106,12 @@ export function PatientAppointmentsPage({ auth, appointments, userData }: Patien
 
   const pastAppointments = appointments.appointments
     .filter((apt: AppointmentRow) => new Date(apt.appointment_time) <= new Date())
-    .sort((a: AppointmentRow, b: AppointmentRow) => new Date(a.appointment_time).getTime() - new Date(b.appointment_time).getTime());
+    .sort((a: AppointmentRow, b: AppointmentRow) => new Date(b.appointment_time).getTime() - new Date(a.appointment_time).getTime());
+
+  // Limit past appointments to 5 unless "show more" is clicked
+  const displayedPastAppointments = showAllPastAppointments 
+    ? pastAppointments 
+    : pastAppointments.slice(0, 5);
 
   // Format date for display
   const formatDate = (dateStr: string) => {
@@ -563,49 +569,78 @@ export function PatientAppointmentsPage({ auth, appointments, userData }: Patien
             {/* Past Appointments */}
             <div>
               <h4 style={{ margin: '0 0 12px 0', color: '#42b5f5', fontSize: '16px' }}>
-                Past ({pastAppointments.length})
+                Past ({showAllPastAppointments ? pastAppointments.length : displayedPastAppointments.length}{!showAllPastAppointments && pastAppointments.length > 5 ? ` of ${pastAppointments.length}` : ''})
               </h4>
-              {pastAppointments.length === 0 ? (
+              {displayedPastAppointments.length === 0 ? (
                 <p style={{ color: '#b4cce2', textAlign: 'center', padding: '20px' }}>
                   No past appointments
                 </p>
               ) : (
-                <div style={{ overflowX: 'auto' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', border: '1px solid rgba(136, 194, 227, 0.36)' }}>
-                    <thead>
-                      <tr style={{ backgroundColor: 'rgba(9, 35, 55, 0.82)' }}>
-                        <th style={{ padding: '12px', textAlign: 'left', color: '#42b5f5', fontSize: '14px', border: '1px solid rgba(136, 194, 227, 0.36)' }}>Date & Time</th>
-                        <th style={{ padding: '12px', textAlign: 'left', color: '#42b5f5', fontSize: '14px', border: '1px solid rgba(136, 194, 227, 0.36)' }}>Doctor</th>
-                        <th style={{ padding: '12px', textAlign: 'left', color: '#42b5f5', fontSize: '14px', border: '1px solid rgba(136, 194, 227, 0.36)' }}>Notes</th>
-                        <th style={{ padding: '12px', textAlign: 'left', color: '#42b5f5', fontSize: '14px', border: '1px solid rgba(136, 194, 227, 0.36)' }}>Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {pastAppointments.map((apt: AppointmentRow) => (
-                        <tr key={apt.id} style={{ backgroundColor: 'rgba(9, 32, 52, 0.82)', opacity: '0.8' }}>
-                          <td style={{ padding: '12px', color: '#b4cce2', fontSize: '14px', border: '1px solid rgba(136, 194, 227, 0.36)' }}>
-                            {formatDate(apt.appointment_time)}
-                          </td>
-                          <td style={{ padding: '12px', color: '#b4cce2', fontSize: '14px', border: '1px solid rgba(136, 194, 227, 0.36)' }}>
-                            {apt.doctor_name || 'Doctor'}
-                          </td>
-                          <td style={{ padding: '12px', color: '#b4cce2', fontSize: '14px', border: '1px solid rgba(136, 194, 227, 0.36)' }}>
-                            {apt.notes || 'No notes'}
-                          </td>
-                          <td style={{ padding: '12px', border: '1px solid rgba(136, 194, 227, 0.36)' }}>
-                            <span style={{ 
-                              color: apt.status === 'CANCELLED' ? '#ff90ab' : '#49d7c2',
-                              fontWeight: '500',
-                              fontSize: '14px'
-                            }}>
-                              {apt.status}
-                            </span>
-                          </td>
+                <>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', border: '1px solid rgba(136, 194, 227, 0.36)' }}>
+                      <thead>
+                        <tr style={{ backgroundColor: 'rgba(9, 35, 55, 0.82)' }}>
+                          <th style={{ padding: '12px', textAlign: 'left', color: '#42b5f5', fontSize: '14px', border: '1px solid rgba(136, 194, 227, 0.36)' }}>Date & Time</th>
+                          <th style={{ padding: '12px', textAlign: 'left', color: '#42b5f5', fontSize: '14px', border: '1px solid rgba(136, 194, 227, 0.36)' }}>Doctor</th>
+                          <th style={{ padding: '12px', textAlign: 'left', color: '#42b5f5', fontSize: '14px', border: '1px solid rgba(136, 194, 227, 0.36)' }}>Notes</th>
+                          <th style={{ padding: '12px', textAlign: 'left', color: '#42b5f5', fontSize: '14px', border: '1px solid rgba(136, 194, 227, 0.36)' }}>Status</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                      </thead>
+                      <tbody>
+                        {displayedPastAppointments.map((apt: AppointmentRow) => (
+                          <tr key={apt.id} style={{ backgroundColor: 'rgba(9, 32, 52, 0.82)', opacity: '0.8' }}>
+                            <td style={{ padding: '12px', color: '#b4cce2', fontSize: '14px', border: '1px solid rgba(136, 194, 227, 0.36)' }}>
+                              {formatDate(apt.appointment_time)}
+                            </td>
+                            <td style={{ padding: '12px', color: '#b4cce2', fontSize: '14px', border: '1px solid rgba(136, 194, 227, 0.36)' }}>
+                              {apt.doctor_name || 'Doctor'}
+                            </td>
+                            <td style={{ padding: '12px', color: '#b4cce2', fontSize: '14px', border: '1px solid rgba(136, 194, 227, 0.36)' }}>
+                              {apt.notes || 'No notes'}
+                            </td>
+                            <td style={{ padding: '12px', border: '1px solid rgba(136, 194, 227, 0.36)' }}>
+                              <span style={{ 
+                                color: apt.status === 'CANCELLED' ? '#ff90ab' : '#49d7c2',
+                                fontWeight: '500',
+                                fontSize: '14px'
+                              }}>
+                                {apt.status}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  
+                  {/* Show More/Less Button */}
+                  {pastAppointments.length > 5 && (
+                    <div style={{ textAlign: 'center', marginTop: '16px' }}>
+                      <button
+                        onClick={() => setShowAllPastAppointments(!showAllPastAppointments)}
+                        style={{
+                          background: '#42b5f5',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '6px',
+                          padding: '8px 16px',
+                          fontSize: '14px',
+                          cursor: 'pointer',
+                          fontWeight: '500',
+                          transition: 'background-color 0.2s'
+                        }}
+                        onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#3699d6'}
+                        onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#42b5f5'}
+                      >
+                        {showAllPastAppointments 
+                          ? `Show Less (${pastAppointments.length - 5} hidden)` 
+                          : `Show More (${pastAppointments.length - 5} more)`
+                        }
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </div>

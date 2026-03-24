@@ -4,6 +4,13 @@
 
 Specification-driven development is a methodology where applications are built from formal specifications that serve as both documentation and executable contracts. Your HealthCare SaaS project demonstrates this approach through layered specifications that guide implementation, testing, and deployment.
 
+## Project URL on AWS
+
+[HealthCare SaaS Application](https://d38vpnbis6nxp0.cloudfront.net "A Multi-Tenant Healthcare Portal")
+
+### Credentials to login to the portal:
+ - You can reach me to get the Doctor and Patient login credentials at: [Gopi Krishna Peteti](mailto:petetijobs@yahoo.com)
+
 ## Core Principles
 
 ### 1. Single Source of Truth

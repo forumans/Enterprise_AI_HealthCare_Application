@@ -9,7 +9,7 @@ Specification-driven development is a methodology where applications are built f
 [HealthCare SaaS Application](https://d38vpnbis6nxp0.cloudfront.net)
 
 ### Credentials to login to the portal:
- - You can reach me to get the credentials
+ - You can reach me to get the credentials at: petetijobs@yahoo.com
 
 ## Core Principles
 

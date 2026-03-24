@@ -1,0 +1,144 @@
+name: Frontend Deploy to AWS S3/CloudFront
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'healthcare_saas_app/frontend/**'
+      - '.github/workflows/frontend-deploy.yml'
+  pull_request:
+    branches: [ main, master ]
+    paths:
+      - 'healthcare_saas_app/frontend/**'
+
+env:
+  NODE_VERSION: '18'
+  S3_BUCKET: healthcare-frontend-bucket
+  CF_DISTRIBUTION_ID: EXXXXXXXXXXXXX
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+        cache-dependency-path: healthcare_saas_app/frontend/package-lock.json
+        
+    - name: Install dependencies
+      working-directory: ./healthcare_saas_app/frontend
+      run: npm ci
+      
+    - name: Run type checking
+      working-directory: ./healthcare_saas_app/frontend
+      run: npx tsc -b --pretty false
+      
+    - name: Run tests
+      working-directory: ./healthcare_saas_app/frontend
+      run: npm test -- --coverage
+      
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./healthcare_saas_app/frontend/coverage/lcov.info
+        flags: frontend
+        name: codecov-umbrella
+
+  build-and-deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+        cache-dependency-path: healthcare_saas_app/frontend/package-lock.json
+        
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-east-1
+        
+    - name: Install dependencies
+      working-directory: ./healthcare_saas_app/frontend
+      run: npm ci
+      
+    - name: Build React application
+      working-directory: ./healthcare_saas_app/frontend
+      run: npm run build
+      
+    - name: Deploy to S3
+      working-directory: ./healthcare_saas_app/frontend
+      run: |
+        aws s3 sync dist/ s3://$S3_BUCKET/ \
+          --delete \
+          --exclude ".DS_Store" \
+          --exclude "Thumbs.db"
+          
+    - name: Set cache headers for static assets
+      working-directory: ./healthcare_saas_app/frontend
+      run: |
+        # HTML files - no cache
+        aws s3 cp dist/ s3://$S3_BUCKET/ \
+          --recursive \
+          --include "*.html" \
+          --cache-control "max-age=0,no-cache,no-store,must-revalidate"
+          
+        # JS/CSS files - long cache
+        aws s3 cp dist/ s3://$S3_BUCKET/ \
+          --recursive \
+          --include "*.js" \
+          --include "*.css" \
+          --cache-control "max-age=31536000,immutable"
+          
+        # Images - long cache
+        aws s3 cp dist/ s3://$S3_BUCKET/ \
+          --recursive \
+          --include "*.png" \
+          --include "*.jpg" \
+          --include "*.jpeg" \
+          --include "*.gif" \
+          --include "*.svg" \
+          --include "*.ico" \
+          --include "*.webp" \
+          --cache-control "max-age=31536000"
+          
+    - name: Invalidate CloudFront cache
+      run: |
+        INVALIDATION_ID=$(aws cloudfront create-invalidation \
+          --distribution-id $CF_DISTRIBUTION_ID \
+          --paths "/*" \
+          --query "Invalidation.Id" \
+          --output text)
+          
+        echo "Created invalidation: $INVALIDATION_ID"
+        
+        # Wait for invalidation to complete
+        aws cloudfront wait invalidation-completed \
+          --distribution-id $CF_DISTRIBUTION_ID \
+          --id $INVALIDATION_ID
+          
+    - name: Get CloudFront domain
+      run: |
+        DOMAIN_NAME=$(aws cloudfront get-distribution \
+          --id $CF_DISTRIBUTION_ID \
+          --query "Distribution.DomainName" \
+          --output text)
+          
+        echo "🎉 Frontend deployed successfully!"
+        echo "🌐 CloudFront Domain: https://$DOMAIN_NAME"
+        echo "🔄 Invalidation completed"

@@ -1,0 +1,117 @@
+name: Backend Deploy to AWS ECS
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'healthcare_saas_app/backend/**'
+      - '.github/workflows/backend-deploy.yml'
+  pull_request:
+    branches: [ main, master ]
+    paths:
+      - 'healthcare_saas_app/backend/**'
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: healthcare-backend
+  ECS_SERVICE: healthcare-backend-service
+  ECS_CLUSTER: healthcare-cluster
+  ECS_TASK_DEFINITION: healthcare_saas_app/infrastructure/ecs/task-definition.json
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+          
+    - name: Install dependencies
+      run: |
+        cd healthcare_saas_app/backend
+        pip install -r requirements.txt
+        pip install pytest pytest-asyncio httpx
+        
+    - name: Run tests
+      run: |
+        cd healthcare_saas_app/backend
+        python -m pytest tests/ -v --cov=app --cov-report=xml
+        
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./healthcare_saas_app/backend/coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+
+  build-and-deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+        
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+      
+    - name: Build, tag, and push image to Amazon ECR
+      id: build-image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        cd healthcare_saas_app/backend
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+        docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+        echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+        
+    - name: Fill in the new image ID in the Amazon ECS task definition
+      id: task-def
+      run: |
+        sed -i 's|ACCOUNT-ID.dkr.ecr.us-east-1.amazonaws.com/healthcare-backend:latest|${{ steps.build-image.outputs.image }}|' $ECS_TASK_DEFINITION
+        cat $ECS_TASK_DEFINITION
+        
+    - name: Register Amazon ECS task definition
+      id: register-task-def
+      run: |
+        aws ecs register-task-definition --cli-input-json file://$ECS_TASK_DEFINITION
+        
+    - name: Deploy to Amazon ECS
+      run: |
+        aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_SERVICE --force-new-deployment
+        
+    - name: Wait for deployment to complete
+      run: |
+        aws ecs wait services-stable --cluster $ECS_CLUSTER --services $ECS_SERVICE
+        
+    - name: Get service URL
+      run: |
+        ALB_DNS=$(aws elbv2 describe-load-balancers --names healthcare-backend-alb --query 'LoadBalancers[0].DNSName' --output text)
+        echo "🎉 Backend deployed successfully!"
+        echo "🌐 Load Balancer DNS: http://$ALB_DNS"
+        echo "🔗 Health Check: http://$ALB_DNS/api/health"

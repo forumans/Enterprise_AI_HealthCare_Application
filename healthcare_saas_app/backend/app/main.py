@@ -77,13 +77,21 @@ def create_app() -> FastAPI:
             "/api/health/ready",
             "/api/health/live",
             "/auth/login",
+            "/api/auth/login",
             "/auth/register",
+            "/api/auth/register",
             "/auth/forgot-password",
+            "/api/auth/forgot-password",
             "/auth/reset-password",
+            "/api/auth/reset-password",
             "/doctors",
+            "/api/doctors",
             "/doctors/register",
+            "/api/doctors/register",
             "/admin/register",
+            "/api/admin/register",
             "/doctor/availability/{doctor_id}/ndays",
+            "/api/doctor/availability/{doctor_id}/ndays",
         },
         excluded_prefixes=(),
     )
@@ -122,6 +130,9 @@ def create_app() -> FastAPI:
             app_logger.exception("Database initialization failed during startup.")
             raise
 
+    # Expose business APIs under /api for CloudFront single-behavior proxying.
+    app.include_router(api_router, prefix="/api")
+    # Keep legacy unprefixed routes for backward compatibility.
     app.include_router(api_router)
     app.include_router(health_router, prefix="/api")
 

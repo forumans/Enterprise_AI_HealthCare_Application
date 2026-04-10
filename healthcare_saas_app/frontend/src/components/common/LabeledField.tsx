@@ -5,7 +5,6 @@
  */
 
 import React, { useState } from "react";
-// import { Eye, EyeOff } from "lucide-react";
 import infoIcon from "../../assets/info-icon.svg";
 import type { LabeledFieldProps } from "../../types/app";
 

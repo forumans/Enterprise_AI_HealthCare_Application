@@ -5,7 +5,6 @@
  */
 
 import React from "react";
-// import { Bell, Search, UserCircle2 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { useNavigation } from "../../hooks/useNavigation";
 import { getRouteBreadcrumb } from "../../app/routeBreadcrumbs";

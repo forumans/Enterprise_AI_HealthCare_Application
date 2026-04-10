@@ -11,7 +11,7 @@
 
 ### 1) Clone the Repository
 ```bash
-git clone https://github.com/forumans/Gopi_HealthCare_Application.git
+git clone https://github.com/forumans/Enterprise_AI_HealthCare_Application.git
 cd HealthCare_Application
 ```
 

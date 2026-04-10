@@ -9,7 +9,7 @@ Specification-driven development is a methodology where applications are built f
 [HealthCare SaaS Application](https://d38vpnbis6nxp0.cloudfront.net "A Multi-Tenant Healthcare Portal")
 
 ### Credentials to login to the portal:
- - You can reach me to get the Doctor and Patient login credentials at: [Gopi Krishna Peteti](mailto:petetijobs@yahoo.com)
+ - You can reach us to get the Doctor and Patient login credentials at: [Enterprise AI HealthCare Application](mailto:petetijobs@yahoo.com)
 
 ## Core Principles
 

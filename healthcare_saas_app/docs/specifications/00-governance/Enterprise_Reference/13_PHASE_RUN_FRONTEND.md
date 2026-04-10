@@ -7,10 +7,10 @@ Implement this phase only:
 - `docs/specifications/06-frontend/04_api_integration_data_fetching.md`
 
 Use these reference docs as strict constraints:
-- `docs/specifications/00-governance/Gopi_Reference/06_ANTI_PATTERNS.md`
-- `docs/specifications/00-governance/Gopi_Reference/08_CI_MINIMUM_GATES.md`
-- `docs/specifications/00-governance/Gopi_Reference/04_PHASE_CHECKPOINT_TEMPLATE.md`
-- `docs/specifications/00-governance/Gopi_Reference/07_CONTRACT_CHANGE_POLICY.md`
+- `docs/specifications/00-governance/Enterprise_Reference/06_ANTI_PATTERNS.md`
+- `docs/specifications/00-governance/Enterprise_Reference/08_CI_MINIMUM_GATES.md`
+- `docs/specifications/00-governance/Enterprise_Reference/04_PHASE_CHECKPOINT_TEMPLATE.md`
+- `docs/specifications/00-governance/Enterprise_Reference/07_CONTRACT_CHANGE_POLICY.md`
 
 Do not implement or modify the reference docs themselves.
 Use them only to constrain implementation and reporting behavior.

@@ -5,7 +5,7 @@
  */
 
 import React, { useState } from "react";
-import { Eye, EyeOff } from "lucide-react";
+// import { Eye, EyeOff } from "lucide-react";
 import infoIcon from "../../assets/info-icon.svg";
 import type { LabeledFieldProps } from "../../types/app";
 
@@ -53,7 +53,7 @@ export function LabeledField(props: LabeledFieldProps) {
             onClick={() => setShowPassword(!showPassword)}
             aria-label={showPassword ? "Hide password" : "Show password"}
           >
-            {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+            {showPassword ? "🙈" : "👁️"}
           </button>
         )}
       </div>

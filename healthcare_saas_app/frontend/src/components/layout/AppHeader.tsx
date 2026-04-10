@@ -5,7 +5,7 @@
  */
 
 import React from "react";
-import { Bell, Search, UserCircle2 } from "lucide-react";
+// import { Bell, Search, UserCircle2 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { useNavigation } from "../../hooks/useNavigation";
 import { getRouteBreadcrumb } from "../../app/routeBreadcrumbs";
@@ -99,10 +99,10 @@ export function AppHeader({ session, onSignOut, tenantInfo }: AppHeaderProps) {
 
       <div className="top-actions">
         <div className="search-pill">
-          <Search size={14} /> Search
+          🔍 Search
         </div>
-        <Bell size={16} />
-        <UserCircle2 size={18} />
+        🔔
+        👤
         {session.role !== "GUEST" && (
           <button type="button" onClick={onSignOut}>Sign Out</button>
         )}

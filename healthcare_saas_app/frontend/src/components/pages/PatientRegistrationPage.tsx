@@ -6,7 +6,7 @@
 
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Eye, EyeOff } from "lucide-react";
+// import { Eye, EyeOff } from "lucide-react";
 import { api } from "../../api";
 
 interface FieldErrors {
@@ -88,7 +88,7 @@ const LabeledField = (props: {
               color: '#42b5f5'
             }}
           >
-            {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+            {showPassword ? "🙈" : "👁️"}
           </button>
         )}
       </div>

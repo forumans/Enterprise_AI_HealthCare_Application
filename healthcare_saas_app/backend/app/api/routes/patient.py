@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel
@@ -12,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.dependencies import CurrentIdentity, get_current_identity, require_roles
 from ...core.database import get_db
+from ...core.storage import upload_document
 from ...models import Appointment, Doctor, MedicalRecord, Patient, PatientDocument, Pharmacy, Prescription, User
 from ...services.audit_service import write_audit_log
 
@@ -310,22 +310,23 @@ async def upload_patient_document(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     patient = await _current_patient(identity, db)
-    uploads_dir = Path("backend/uploads")
-    uploads_dir.mkdir(parents=True, exist_ok=True)
 
     timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
     safe_name = (file.filename or "document.bin").replace("/", "_").replace("\\", "_")
-    destination = uploads_dir / f"{timestamp}_{identity.user_id}_{safe_name}"
+    s3_key = f"documents/{identity.tenant_id}/{patient.id}/{timestamp}_{identity.user_id}_{safe_name}"
 
     content = await file.read()
-    destination.write_bytes(content)
+    try:
+        upload_document(content, s3_key, file.content_type or "application/octet-stream")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
 
     record = PatientDocument(
         tenant_id=identity.tenant_id,
         patient_id=patient.id,
         document_name=file.filename,
         document_type=file.content_type,
-        file_path=str(destination),
+        file_path=s3_key,
     )
     db.add(record)
     await db.flush()

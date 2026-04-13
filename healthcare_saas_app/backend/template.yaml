@@ -1,0 +1,161 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Healthcare SaaS Backend — AWS SAM Template
+#
+# Replaces ECS Fargate + ALB with Lambda + API Gateway HTTP API.
+# Cost driver comparison:
+#   Before : ALB ~$16/mo base + Fargate tasks running 24/7 (~$30–80/mo)
+#   After  : API Gateway HTTP API ~$1/1M requests + Lambda pay-per-invocation
+#
+# Deploy:
+#   sam build
+#   sam deploy --guided          # first time (creates samconfig.toml)
+#   sam deploy                   # subsequent deploys
+#
+# Prerequisites:
+#   - Python 3.11 runtime available in your region
+#   - An existing VPC + private subnets (where RDS lives)
+#   - An existing RDS security group that allows the Lambda SG on port 5432
+#   - An existing S3 bucket for document uploads
+# ─────────────────────────────────────────────────────────────────────────────
+
+Description: Healthcare SaaS FastAPI backend on Lambda + API Gateway HTTP API
+
+# ── Shared parameter defaults applied to all Lambda functions ─────────────────
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 30           # seconds — adjust up to 60 if slow DB cold-starts observed
+    MemorySize: 512       # MB — increase to 1024 if cold-starts are too slow
+    Environment:
+      Variables:
+        APP_ENV: !Ref AppEnv
+        DATABASE_URL: !Ref DatabaseUrl
+        JWT_SECRET: !Ref JwtSecret
+        JWT_ALGORITHM: HS256
+        ACCESS_TOKEN_MINUTES: "30"
+        CORS_ORIGINS: !Ref CorsOrigins
+        DB_SCHEMA_INIT_ON_STARTUP: "false"
+        S3_BUCKET_NAME: !Ref DocumentsBucketName
+        AWS_SECRETS_MANAGER_ENABLED: "false"
+    VpcConfig:
+      SecurityGroupIds:
+        - !Ref LambdaSecurityGroupId
+      SubnetIds: !Split [",", !Ref PrivateSubnetIds]
+
+# ── Deployment parameters (filled in during `sam deploy --guided`) ────────────
+Parameters:
+  AppEnv:
+    Type: String
+    Default: production
+    AllowedValues: [production, staging, dev]
+
+  DatabaseUrl:
+    Type: String
+    Description: "Async PostgreSQL connection string: postgresql+asyncpg://user:pass@host:5432/db"
+    NoEcho: true
+
+  JwtSecret:
+    Type: String
+    Description: "Secret key used for JWT signing — must match the value used by frontend auth"
+    NoEcho: true
+
+  CorsOrigins:
+    Type: String
+    Description: "Comma-separated list of allowed frontend origins, e.g. https://app.example.com"
+
+  DocumentsBucketName:
+    Type: String
+    Description: "Name of the existing private S3 bucket used for document uploads"
+
+  LambdaSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: "Security group for the Lambda function (must be allowed by RDS security group on port 5432)"
+
+  PrivateSubnetIds:
+    Type: String
+    Description: "Comma-separated list of private subnet IDs where RDS resides, e.g. subnet-aaa,subnet-bbb"
+
+# ── Resources ─────────────────────────────────────────────────────────────────
+Resources:
+
+  # ── IAM Role ────────────────────────────────────────────────────────────────
+  BackendFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        # Allows writing Lambda logs to CloudWatch
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: S3DocumentAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                Resource: !Sub "arn:aws:s3:::${DocumentsBucketName}/documents/*"
+
+  # ── Lambda Function ─────────────────────────────────────────────────────────
+  BackendFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-backend"
+      # SAM builds from backend/ directory using requirements.txt
+      CodeUri: ./
+      # Entry point: app/main.py  →  handler = Mangum(app, lifespan="off")
+      Handler: app.main.handler
+      Role: !GetAtt BackendFunctionRole.Arn
+      Description: "Healthcare SaaS FastAPI backend (Mangum adapter)"
+      Events:
+        # Catch-all route — API Gateway forwards every path/method to Lambda.
+        # FastAPI + Mangum route internally.
+        ApiCatchAll:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Method: ANY
+            Path: "/{proxy+}"
+        # Root path (needed separately for requests to /)
+        ApiRoot:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Method: ANY
+            Path: /
+
+  # ── API Gateway HTTP API ─────────────────────────────────────────────────────
+  # HTTP API is ~70% cheaper than REST API and sufficient for this use case.
+  # CORS is handled by FastAPI's CORSMiddleware — do NOT enable CORS here
+  # (double-CORS headers break browser requests).
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      Name: !Sub "${AWS::StackName}-http-api"
+      Description: "Healthcare SaaS API Gateway HTTP API"
+      # Keep default $default stage — no extra /stage prefix in URLs.
+      StageName: $default
+
+# ── Outputs ───────────────────────────────────────────────────────────────────
+Outputs:
+  ApiUrl:
+    Description: "API Gateway endpoint URL — set this as VITE_API_BASE_URL in your frontend"
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+
+  BackendFunctionArn:
+    Description: "Lambda function ARN"
+    Value: !GetAtt BackendFunction.Arn
+
+  BackendFunctionName:
+    Description: "Lambda function name (use for manual invocations or CloudWatch log group)"
+    Value: !Ref BackendFunction

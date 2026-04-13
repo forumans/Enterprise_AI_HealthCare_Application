@@ -7,7 +7,6 @@ UI currently uploads via `/patient/documents`; this route adds generic
 from __future__ import annotations
 
 from datetime import datetime
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy import and_, select
@@ -15,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.dependencies import CurrentIdentity, get_current_identity, require_roles
 from ...core.database import get_db
+from ...core.storage import generate_presigned_url, upload_document
 from ...models import Patient, PatientDocument
 from ...services.audit_service import write_audit_log
 
@@ -42,20 +42,21 @@ async def create_document(
     if patient is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found.")
 
-    uploads_dir = Path("backend/uploads")
-    uploads_dir.mkdir(parents=True, exist_ok=True)
-
     timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
     safe_name = (file.filename or "document.bin").replace("/", "_").replace("\\", "_")
-    destination = uploads_dir / f"{timestamp}_{patient_id}_{safe_name}"
-    destination.write_bytes(await file.read())
+    s3_key = f"documents/{identity.tenant_id}/{patient_id}/{timestamp}_{safe_name}"
+
+    try:
+        upload_document(await file.read(), s3_key, file.content_type or "application/octet-stream")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
 
     record = PatientDocument(
         tenant_id=identity.tenant_id,
         patient_id=patient_id,
         document_name=file.filename,
         document_type=file.content_type,
-        file_path=str(destination),
+        file_path=s3_key,
     )
     db.add(record)
     await db.flush()
@@ -86,13 +87,19 @@ async def list_documents(
         PatientDocument.deleted_at.is_(None),
     )
     rows = (await db.execute(stmt)).scalars().all()
-    return [
-        {
-            "id": row.id,
-            "document_name": row.document_name,
-            "document_type": row.document_type,
-            "file_path": row.file_path,
-            "signed_at": row.signed_at.isoformat() if row.signed_at else None,
-        }
-        for row in rows
-    ]
+    results = []
+    for row in rows:
+        try:
+            download_url = generate_presigned_url(row.file_path)
+        except RuntimeError:
+            download_url = None
+        results.append(
+            {
+                "id": row.id,
+                "document_name": row.document_name,
+                "document_type": row.document_type,
+                "download_url": download_url,
+                "signed_at": row.signed_at.isoformat() if row.signed_at else None,
+            }
+        )
+    return results

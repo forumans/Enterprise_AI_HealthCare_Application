@@ -88,12 +88,30 @@ celerybeat-schedule
 # SageMath parsed files
 *.sage.py
 
-# Environments
+# Environment files — never commit real values
 .env
 .env.local
+.env.test
+.env.production
+.env.development
 .env.development.local
 .env.test.local
 .env.production.local
+
+# AWS SAM build output and local test config
+.aws-sam/
+samconfig.toml
+local-env.json
+
+# Claude Code local config
+.claude/settings.local.json
+
+# Frontend build output
+frontend/dist/
+frontend/build/
+
+# Local uploads (replaced by S3)
+backend/uploads/
 
 # Spyder project settings
 .spyderproject

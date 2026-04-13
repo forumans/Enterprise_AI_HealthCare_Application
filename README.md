@@ -6,10 +6,10 @@ Specification-driven development is a methodology where applications are built f
 
 ## Project URL on AWS
 
-[HealthCare SaaS Application](https://d38vpnbis6nxp0.cloudfront.net "A Multi-Tenant Healthcare Portal")
+The application is deployed on AWS using CloudFront + Lambda + API Gateway + RDS.
 
 ### Credentials to login to the portal:
- - You can reach us to get the Doctor and Patient login credentials at: [Enterprise AI HealthCare Application](mailto:petetijobs@yahoo.com)
+ - Contact the project maintainer to request demo credentials for the Doctor and Patient portal.
 
 ## Core Principles
 

@@ -4,6 +4,12 @@
 .env.test
 .env.production
 
+# SAM local environment (contains secrets)
+backend/local-env.json
+
+# SAM build output
+backend/.aws-sam/
+
 # Python
 __pycache__/
 *.py[cod]

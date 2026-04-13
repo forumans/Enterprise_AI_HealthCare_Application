@@ -140,3 +140,9 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+
+# Lambda handler — translates API Gateway HTTP API events to ASGI.
+# lifespan="off" prevents Mangum from trying to manage startup/shutdown events,
+# which are handled by FastAPI's own @app.on_event hooks instead.
+from mangum import Mangum  # noqa: E402
+handler = Mangum(app, lifespan="off")

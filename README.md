@@ -58,20 +58,33 @@ graph TB
     subgraph "Frontend Layer"
         React[React App]
     end
-    
-    subgraph "API Gateway"
-        ALB[Application Load Balancer]
+
+    subgraph "CDN / Edge"
+        CF[CloudFront]
+        S3[S3 Static Hosting]
     end
-    
+
+    subgraph "API Layer"
+        APIGW[API Gateway HTTP API]
+        Lambda[Lambda — FastAPI + Mangum]
+    end
+
     subgraph "Backend Services"
-        FastAPI[FastAPI Backend]
-        Auth[JWT Auth Service]
+        Auth[JWT Auth — TenantContextMiddleware]
     end
-    
+
     subgraph "Data Layer"
-        RDS[(PostgreSQL)]
-        Secrets[AWS Secrets Manager]
+        RDS[(RDS PostgreSQL)]
+        S3Docs[S3 Document Storage]
     end
+
+    React --> CF
+    CF --> S3
+    CF --> APIGW
+    APIGW --> Lambda
+    Lambda --> Auth
+    Lambda --> RDS
+    Lambda --> S3Docs
 ```
 
 ### Phase 3: API Specification
@@ -167,13 +180,16 @@ sequenceDiagram
 **File**: `08-deployment/aws_deployment_spec.md`
 
 ```yaml
-# Infrastructure as Code specification
+# AWS SAM template (Infrastructure as Code)
 Resources:
-  ECSCluster:
-    Type: AWS::ECS::Cluster
+  BackendFunction:
+    Type: AWS::Serverless::Function
     Properties:
-      ClusterName: healthcare-cluster
-      
+      Runtime: python3.12
+      Handler: app.main.handler
+      MemorySize: 512
+      Timeout: 30
+
   RDSInstance:
     Type: AWS::RDS::DBInstance
     Properties:

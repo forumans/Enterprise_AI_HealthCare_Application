@@ -1,3 +1,7 @@
+> **DEPRECATED** — This document describes the former ECS Fargate + ALB architecture. The application now runs on **Lambda + API Gateway**. See [`healthcare_saas_app/docs/deployment.md`](../../healthcare_saas_app/docs/deployment.md) for the current deployment guide.
+
+---
+
 # Prompt: Deployment Architecture
 
 ## Prompt

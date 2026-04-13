@@ -33,7 +33,7 @@ class Settings:
     access_token_minutes: int = int(os.getenv("ACCESS_TOKEN_MINUTES"))
     cors_origins: str = os.getenv("CORS_ORIGINS")
     db_schema_init_on_startup: bool = _env_flag("DB_SCHEMA_INIT_ON_STARTUP")
-    # HOST/PORT are only used by Uvicorn/Gunicorn in local/ECS mode.
+    # HOST/PORT are only used by Uvicorn in local development.
     # Lambda does not need them, so they default to safe values.
     host: str = os.getenv("HOST", "0.0.0.0")
     port: int = int(os.getenv("PORT", "8000"))

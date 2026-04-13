@@ -40,9 +40,10 @@ USER appuser
 # Expose port
 EXPOSE 8000
 
-# Health check for AWS ECS/Fargate
+# Health check for local development
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/api/health || exit 1
 
-# Run the application with gunicorn for production
-CMD ["gunicorn", "app.main:app", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8000", "--timeout", "120", "--access-logfile", "-", "--error-logfile", "-"]
+# Run with uvicorn for local development.
+# In production, Lambda invokes the Mangum handler defined in app/main.py directly.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -1,4 +1,4 @@
-"""Health check endpoints for AWS ECS/Fargate monitoring."""
+"""Health check endpoints for Lambda and local development monitoring."""
 
 from datetime import UTC, datetime
 
@@ -17,7 +17,7 @@ router = APIRouter()
 @router.get("/health", tags=["health"])
 async def health_check():
     """
-    Basic health check endpoint for AWS load balancer.
+    Basic health check endpoint.
     Returns service health and database connectivity status.
     """
     try:
@@ -57,8 +57,7 @@ async def health_check():
 @router.get("/health/ready", tags=["health"])
 async def readiness_check():
     """
-    Detailed readiness check for Kubernetes/ECS readiness probes.
-    Checks all critical dependencies.
+    Detailed readiness check — verifies all critical dependencies.
     """
     checks = {
         "database": False,
@@ -88,8 +87,7 @@ async def readiness_check():
 @router.get("/health/live", tags=["health"])
 async def liveness_check():
     """
-    Liveness check for Kubernetes/ECS liveness probes.
-    Simple check to ensure the process is running.
+    Liveness check — confirms the process is running and responsive.
     """
     return {
         "status": "alive",

@@ -5,24 +5,24 @@ This document captures the runtime sequence for a **doctor login** in the AWS de
 
 ## Scope and assumptions
 - Frontend is served from **S3 + CloudFront**.
-- Backend runs on **ECS Fargate** behind an **Application Load Balancer (ALB)**.
-- Backend container receives `DATABASE_URL`, `JWT_SECRET`, and `CORS_ORIGINS` from **AWS Secrets Manager**.
-- PostgreSQL runs on **RDS** and is reachable from ECS task security group.
-- Frontend uses `VITE_API_BASE_URL` to call backend login endpoint.
+- Backend runs as an **AWS Lambda function** exposed via **API Gateway HTTP API**.
+- CloudFront routes `/api/*` requests to API Gateway; all other routes serve the React app from S3.
+- Backend receives `DATABASE_URL`, `JWT_SECRET`, and `CORS_ORIGINS` from **Lambda environment variables** (set at deploy time via AWS SAM parameter overrides).
+- PostgreSQL runs on **RDS** and is reachable from the Lambda function's VPC security group.
+- Frontend uses `VITE_API_BASE_URL` to call the backend login endpoint (in production this is not needed — CloudFront handles routing via the `/api/*` behavior).
 
 ## Primary sequence (successful doctor login)
 
 ```mermaid
 sequenceDiagram
-    title: Doctor Login - AWS Runtime Request Flow. CloudFront → S3 → React → ALB → ECS → RDS 
+    title: Doctor Login - AWS Runtime Request Flow. CloudFront → S3 → React → API Gateway → Lambda → RDS
     autonumber
     actor Doctor as Doctor (Browser)
     participant CF as CloudFront (CDN)
     participant S3 as S3 Static Site
     participant UI as React App (AuthContext)
-    participant ALB as Application Load Balancer
-    participant ECS as ECS Fargate (FastAPI)
-    participant SM as AWS Secrets Manager
+    participant APIGW as API Gateway (HTTP API)
+    participant Lambda as Lambda (FastAPI + Mangum)
     participant RDS as RDS PostgreSQL
 
     Doctor->>CF: GET / (open app)
@@ -31,23 +31,25 @@ sequenceDiagram
     CF-->>Doctor: App shell + JS/CSS
 
     Doctor->>UI: Enter email/password + choose Doctor login
-    UI->>ALB: POST /auth/login {email,password,remember_me}
+    UI->>CF: POST /api/auth/login {email, password}
 
-    ALB->>ECS: Forward request to healthy target on :8000
+    CF->>APIGW: Forward /api/* request (AllViewerExceptHostHeader policy)
+    APIGW->>Lambda: Invoke with Mangum-wrapped ASGI event
 
-    Note over ECS,SM: Task startup already injected DATABASE_URL/JWT_SECRET/CORS_ORIGINS from Secrets Manager
+    Note over Lambda: Cold start (~1-2s first invocation)<br/>Env vars (DATABASE_URL, JWT_SECRET) injected at Lambda init
 
-    ECS->>RDS: SELECT user by lower(email)
-    RDS-->>ECS: User row (role=DOCTOR, password_hash, tenant_id)
+    Lambda->>RDS: SELECT user by lower(email) WHERE tenant_id = ?
+    RDS-->>Lambda: User row (role=DOCTOR, password_hash, tenant_id)
 
-    ECS->>ECS: verify_password(password, password_hash)
-    ECS->>ECS: create_access_token(sub=user_id, tenant_id, role)
-    ECS-->>ALB: 200 OK {access_token, role, tenant_id, user_name}
-    ALB-->>UI: 200 login payload
+    Lambda->>Lambda: verify_password(password, password_hash)
+    Lambda->>Lambda: create_access_token(user_id, tenant_id, role)
+    Lambda-->>APIGW: 200 OK {access_token, role, tenant_id, user_name}
+    APIGW-->>CF: 200 login payload
+    CF-->>UI: 200 login payload
 
     UI->>UI: Validate returned role == DOCTOR
-    UI->>UI: Store session in client state
-    UI->>UI: Navigate to /doctors/appointments
+    UI->>UI: Store token in React context (not localStorage)
+    UI->>UI: Navigate to /doctor/appointments
     UI-->>Doctor: Doctor dashboard/appointments page
 ```
 
@@ -55,27 +57,30 @@ sequenceDiagram
 
 1. **Frontend delivery path**
    1. Browser requests the app via CloudFront.
-   2. CloudFront serves cached files or fetches from S3 origin.
+   2. CloudFront serves cached files or fetches from S3 origin (default cache behavior).
    3. Browser loads React bundle and initializes auth context.
 
 2. **Doctor submits credentials**
-   1. React login handler sends POST to `/auth/login` using configured API base URL.
-   2. Request carries JSON body with `email`, `password`, and `remember_me`.
+   1. React login handler sends `POST /api/auth/login` via CloudFront (relative path — no hardcoded API URL needed in production).
+   2. Request carries JSON body with `email` and `password`.
 
 3. **Edge and compute routing**
-   1. ALB listener forwards the request to ECS target group.
-   2. ECS task receives request at FastAPI on port 8000.
+   1. CloudFront matches the `/api/*` cache behavior and forwards to the API Gateway origin.
+   2. The `AllViewerExceptHostHeader` origin request policy is applied — this strips the viewer's `Host` header so API Gateway receives its own hostname, not the CloudFront domain.
+   3. API Gateway HTTP API invokes the Lambda function synchronously.
+   4. Mangum adapter translates the API Gateway event into an ASGI request that FastAPI handles.
 
 4. **Backend authentication logic**
-   1. FastAPI login route lowercases email and fetches user from DB.
-   2. Password hash verification is performed.
-   3. On success, JWT access token is generated with identity context.
-   4. Response includes role and tenant metadata used by frontend.
+   1. FastAPI `TenantContextMiddleware` recognises `/api/auth/login` as a public path and skips JWT validation.
+   2. Login route lowercases email and fetches the user from RDS.
+   3. Password hash verification is performed (PBKDF2-SHA256, 120,000 iterations).
+   4. On success, JWT access token is generated (HS256, 30-minute TTL) with `user_id`, `tenant_id`, and `role` claims.
+   5. Response includes role and tenant metadata used by the frontend.
 
 5. **Frontend role safety check**
-   1. Client verifies API-returned role matches selected login target (`DOCTOR`).
-   2. On match, session is stored and doctor route is opened.
-   3. On mismatch, login is rejected with generic invalid-credentials message.
+   1. Client verifies the API-returned role matches the selected login target (`DOCTOR`).
+   2. On match, token is stored in React context (not `localStorage` — avoids XSS token theft) and the doctor route is opened.
+   3. On mismatch, login is rejected with a generic invalid-credentials message.
 
 ## Error branches (high-level)
 
@@ -84,32 +89,37 @@ sequenceDiagram
 - Frontend shows authentication error and remains on login screen.
 
 ### B) Role mismatch (security gate in UI)
-- Backend login succeeds but role is not `DOCTOR` while doctor tab is selected.
+- Backend login succeeds but role is not `DOCTOR` while the doctor tab is selected.
 - Frontend blocks session establishment and shows generic invalid credentials message.
 
 ### C) CORS mismatch
-- If CloudFront/frontend origin is not present in `CORS_ORIGINS`, browser blocks call.
-- User sees network/CORS error at login.
+- If the CloudFront origin is not present in `CORS_ORIGINS` (Lambda env var), the browser blocks the preflight response.
+- User sees a network/CORS error at login.
 
-### D) ECS or DB unavailable
-- ALB may return 5xx if no healthy target.
-- Backend may return 5xx if DB connection/query fails.
+### D) Lambda or DB unavailable
+- Lambda cold start failure or unhandled exception → API Gateway returns 5xx.
+- RDS unreachable (security group misconfiguration, DB down) → FastAPI returns `503 Service Unavailable` from the health check path; login returns 5xx.
+
+### E) Host header rejected by API Gateway
+- If CloudFront forwards the viewer's `Host` header, API Gateway returns `403 Forbidden`.
+- CloudFront custom error rules may map 403 → `index.html`, causing the browser to receive HTML instead of JSON.
+- Fix: ensure the `/api/*` cache behavior uses the `AllViewerExceptHostHeader` origin request policy.
 
 ## AWS components involved in this flow
-- **CloudFront**: serves frontend globally with caching.
-- **S3**: stores built React assets.
-- **ALB**: public API entry and traffic distribution.
-- **ECS Fargate task**: hosts FastAPI API.
-- **Secrets Manager**: injects runtime secrets into task environment.
-- **RDS PostgreSQL**: user credential + tenant source of truth.
-- **CloudWatch Logs**: captures backend container logs for troubleshooting.
+- **CloudFront**: serves frontend globally and proxies `/api/*` to API Gateway.
+- **S3**: stores built React static assets.
+- **API Gateway (HTTP API)**: public API entry point; invokes Lambda on each request.
+- **Lambda (python3.12)**: hosts FastAPI wrapped with the Mangum ASGI adapter; env vars injected at deploy time.
+- **RDS PostgreSQL**: user credential and tenant source of truth; in private VPC subnets.
+- **CloudWatch Logs**: captures Lambda invocation logs at `/aws/lambda/healthcare-backend-backend`.
 
 ## Notes for operations and observability
 - Login request health depends on:
-  - ALB target health (`/api/health`)
-  - ECS task health check passing
-  - DB reachability from ECS SG to RDS SG on 5432
+  - Lambda function reachability (API Gateway → Lambda invocation succeeds)
+  - DB reachability from Lambda VPC security group to RDS security group on port 5432
+  - `CORS_ORIGINS` env var includes the CloudFront domain
 - Useful telemetry during incidents:
-  - ALB 4xx/5xx and target response time
-  - ECS task logs in `/ecs/healthcare-backend`
-  - RDS connectivity and query latency
+  - API Gateway 4xx/5xx metrics in CloudWatch
+  - Lambda logs: `aws logs tail /aws/lambda/healthcare-backend-backend --follow --region us-east-1`
+  - Lambda health endpoint: `GET /api/health` → `{"status":"healthy","database":"connected"}`
+  - RDS connectivity and query latency in CloudWatch RDS metrics

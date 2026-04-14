@@ -1,152 +1,232 @@
-> **DEPRECATED** — This document describes the former ECS Fargate + ALB architecture. The application now runs on **Lambda + API Gateway**. See [`healthcare_saas_app/docs/deployment.md`](../../healthcare_saas_app/docs/deployment.md) for the current deployment guide.
-
----
-
 # Prompt: Recreate the Current AWS Architecture (Healthcare SaaS)
 
 ## How to use this document
-Copy the **Master Prompt** section into a code generation agent (for example Claude) and ask it to generate:
-1) reproducible infrastructure artifacts, 2) deployment commands, and 3) a verification runbook.
 
-This prompt is grounded in the current repository configuration and recent production fixes.
+Copy the **Master Prompt** section into a code generation agent (Claude Code, Codex, etc.) and ask it to generate:
+1. Reproducible infrastructure artifacts
+2. Deployment commands
+3. A verification runbook
+
+This prompt reflects the current production architecture after migrating from ECS Fargate + ALB to Lambda + API Gateway.
 
 ---
 
 ## Master Prompt (copy/paste)
 
-You are a senior cloud/platform engineer. Recreate the **current** AWS architecture and deployment setup for this Healthcare SaaS app exactly, with minimal cost and no new paid services unless explicitly marked optional.
+You are a senior cloud/platform engineer. Recreate the **current** AWS architecture and deployment setup for this Healthcare SaaS application exactly, using AWS SAM for backend IaC and GitHub Actions for CI/CD.
 
 ### 1) Objectives
-- Recreate the current architecture used by this repository:
-  - Frontend: React/Vite static site on S3 behind CloudFront
-  - Backend: FastAPI on ECS Fargate behind an internet-facing ALB
-  - Database: PostgreSQL on RDS
-  - Secrets: AWS Secrets Manager
-  - Logs: CloudWatch Logs
-  - CI/CD: GitHub Actions for backend and frontend
-- Preserve current routing strategy that avoids CloudFront behavior-limit issues:
-  - Frontend calls CloudFront with API base URL ending in `/api`
-  - CloudFront forwards `/api/*` to backend ALB origin
-  - Default `*` behavior serves static frontend from S3
+
+Recreate the current architecture:
+- Frontend: React/Vite static site built to `dist/`, hosted on S3, served via CloudFront
+- Backend: FastAPI wrapped with Mangum ASGI adapter, deployed as AWS Lambda (python3.12, 512 MB, 30s timeout)
+- API edge: API Gateway HTTP API (cheaper than REST API)
+- Routing: CloudFront proxies `/api/*` to API Gateway; default behavior serves S3 frontend
+- Database: PostgreSQL on RDS in private VPC subnets
+- Document storage: S3 private bucket; presigned URLs for downloads
+- Secrets: Lambda environment variables injected at deploy time via SAM `--parameter-overrides`
+- Logs: CloudWatch Logs at `/aws/lambda/<function-name>`
 
 ### 2) Hard Constraints
-- Do not introduce new required paid services.
-- Keep us-east-1 as region.
-- Keep ECS/Fargate + ALB + RDS + S3 + CloudFront + Secrets Manager + CloudWatch.
-- Preserve compatibility with existing repo workflows and file structure.
-- Do not hardcode secret values in code or workflows.
 
-### 3) Repository Ground Truth (must align with these files)
-- Backend deploy workflow: `healthcare_saas_app/.github/workflows/backend-deploy.yml`
-- Frontend deploy workflow: `healthcare_saas_app/.github/workflows/frontend-deploy.yml`
-- ECS task definition: `healthcare_saas_app/infrastructure/ecs/task-definition.json`
-- ALB template: `healthcare_saas_app/infrastructure/alb/application-load-balancer.json`
-- Security groups: `healthcare_saas_app/infrastructure/security/security-groups.json`
-- Backend app entrypoint/middleware routing: `healthcare_saas_app/backend/app/main.py`
-- Frontend API base behavior: `healthcare_saas_app/frontend/src/api.ts`
+- Backend is deployed via `sam build && sam deploy` — no Docker image push, no ECR.
+- No ECS, no ALB, no Secrets Manager (secrets are Lambda env vars).
+- Keep `us-east-1` as the primary region.
+- No new required paid services.
+- No hardcoded secrets in code, config files, or workflows.
+- `DatabaseUrl` and `JwtSecret` SAM parameters must be `NoEcho: true` — never persisted to samconfig.toml.
+
+### 3) Repository Ground Truth
+
+All infrastructure definitions are in these files — align with them exactly:
+
+| Purpose | File |
+|---------|------|
+| SAM template (Lambda + API Gateway + IAM) | `healthcare_saas_app/backend/template.yaml` |
+| FastAPI app + Mangum handler | `healthcare_saas_app/backend/app/main.py` |
+| DB engine (pool_size=1) | `healthcare_saas_app/backend/app/core/database.py` |
+| S3 upload utility + presigned URLs | `healthcare_saas_app/backend/app/core/storage.py` |
+| App config (env vars) | `healthcare_saas_app/backend/app/core/config.py` |
+| Frontend API client | `healthcare_saas_app/frontend/src/api.ts` |
+| SQL schema migrations | `healthcare_saas_app/backend/migrations/` |
 
 ### 4) Current Logical Architecture
-- CloudFront distribution in front of frontend and API.
-- S3 bucket hosts built frontend assets (default behavior).
-- CloudFront behavior `/api/*` routes to backend ALB origin.
-- ALB forwards to ECS service `healthcare-backend-service` in cluster `healthcare-cluster`.
-- ECS task runs container `healthcare-backend` on port 8000.
-- Backend reads runtime secrets from Secrets Manager:
-  - `DATABASE_URL`
-  - `JWT_SECRET`
-  - `CORS_ORIGINS`
-- Backend health endpoints used by ECS/ALB:
-  - `/api/health`
-  - `/api/health/ready`
-  - `/api/health/live`
-- RDS PostgreSQL is reachable from ECS via security group rules.
 
-### 5) Required Resource/Name Baseline
-Use these as defaults unless parameterized:
-- Region: `us-east-1`
-- ECR repo: `healthcare-backend`
-- ECS cluster: `healthcare-cluster`
-- ECS service: `healthcare-backend-service`
-- ECS task family: `healthcare-backend`
-- ALB name: `healthcare-backend-alb`
-- CloudWatch log group: `/ecs/healthcare-backend`
-- Secrets (names):
-  - `healthcare-db-url`
-  - `healthcare-jwt-secret`
-  - `healthcare-cors-origins`
+```
+Browser
+  └── CloudFront (CDN)
+        ├── /api/*  → API Gateway HTTP API (custom origin)
+        │                └── Lambda function (FastAPI + Mangum)
+        │                      ├── RDS PostgreSQL (VPC private subnets)
+        │                      └── S3 (patient document storage)
+        └── /* (default) → S3 bucket (static React assets)
+```
 
-### 6) Critical Implementation Details
-- Backend must expose business routes both unprefixed and prefixed with `/api` to preserve backward compatibility while enabling CloudFront simplification.
-- Frontend `VITE_API_BASE_URL` must be `https://<cloudfront-domain>/api`.
-- CloudFront must have exactly:
-  - `/api/*` => backend ALB origin, `Managed-CachingDisabled`, `Managed-AllViewer`
-  - `*` default => S3 frontend origin
-- Ensure public auth endpoints under `/api` are excluded from auth middleware checks (`/api/auth/login`, `/api/auth/register`, `/api/auth/forgot-password`, `/api/auth/reset-password`, etc.).
+### 5) CloudFront Routing Details
 
-### 7) Known Pitfalls (must include prevention)
-- **Mixed content**: HTTPS frontend calling HTTP ALB directly. Fix by calling CloudFront HTTPS `/api` only.
-- **Secrets format bug**: `DATABASE_URL` secret must be plaintext URL string, not JSON object string.
-- **CloudFront stale cache**: API paths can return `<!doctype html>` from S3 if cached. Use invalidation (`/*`) after behavior or routing changes.
-- **Behavior limits**: Avoid per-endpoint CloudFront behaviors; consolidate API under `/api/*`.
-- **Auth 401 regression**: If `/api/auth/login` returns missing auth header, middleware exclusions for `/api` public routes are incomplete.
+- Default behavior (`*`): S3 origin, standard caching, SPA fallback (403/404 → `/index.html`)
+- API behavior (`/api/*`):
+  - Origin: `<api-id>.execute-api.us-east-1.amazonaws.com`
+  - Protocol: HTTPS only
+  - Cache policy: `CachingDisabled` (managed policy ID: `4135ea2d-6df8-44a3-9df3-4b5a84be39ad`)
+  - Origin request policy: `AllViewerExceptHostHeader` (managed policy ID: `b689b0a8-53d0-40ab-baf2-68738e2966ac`)
 
-### 8) Networking/Security Expectations
-- ALB SG allows inbound 80/443 from internet.
-- ECS SG allows inbound 8000 from ALB SG only.
-- RDS SG allows inbound 5432 from ECS SG only.
-- ECS tasks use `awsvpc` network mode and Fargate launch type.
-- Logs routed to CloudWatch (`awslogs` driver).
+**Why `AllViewerExceptHostHeader` is mandatory:** API Gateway rejects requests with the viewer's `Host` header (the CloudFront domain). Without this policy, CloudFront forwards the wrong `Host`, API Gateway returns 403, and CloudFront's SPA fallback serves `index.html` for every API request.
 
-### 9) CI/CD Behavior to Recreate
-- Backend workflow:
-  - test backend
-  - build/push image to ECR (sha + latest)
-  - register task definition
-  - force new ECS deployment
-  - wait for service stability
-- Frontend workflow:
-  - test/type-check frontend
-  - build Vite app
-  - sync `dist/` to S3
-  - set cache headers
-  - invalidate CloudFront
+### 6) SAM Template Structure
 
-### 10) Deliverables Required from You (the agent)
+```yaml
+Transform: AWS::Serverless-2016-10-31
+
+Parameters:
+  AppEnv:                { Type: String, Default: production }
+  DatabaseUrl:           { Type: String, NoEcho: true }
+  JwtSecret:             { Type: String, NoEcho: true }
+  CorsOrigins:           { Type: String }
+  DocumentsBucketName:   { Type: String }
+  LambdaSecurityGroupId: { Type: String }
+  PrivateSubnetIds:      { Type: String }
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Handler: app.main.handler
+    Timeout: 30
+    MemorySize: 512
+    Environment:
+      Variables:
+        APP_ENV: !Ref AppEnv
+        DATABASE_URL: !Ref DatabaseUrl
+        JWT_SECRET: !Ref JwtSecret
+        CORS_ORIGINS: !Ref CorsOrigins
+        S3_BUCKET_NAME: !Ref DocumentsBucketName
+        DB_SCHEMA_INIT_ON_STARTUP: "false"
+
+Resources:
+  BackendFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      VpcConfig:
+        SecurityGroupIds: [!Ref LambdaSecurityGroupId]
+        SubnetIds: !Split [",", !Ref PrivateSubnetIds]
+      Policies:
+        - S3CrudPolicy: { BucketName: !Ref DocumentsBucketName }
+      Events:
+        ApiProxy:
+          Type: HttpApi
+          Properties:
+            Path: /{proxy+}
+            Method: ANY
+```
+
+Do NOT add a `RoleName` to the Lambda execution role — named roles require `CAPABILITY_NAMED_IAM` and will break standard `sam deploy`.
+
+### 7) Lambda Entry Point
+
+```python
+# backend/app/main.py (bottom of file)
+from mangum import Mangum
+handler = Mangum(app, lifespan="off")
+```
+
+### 8) Database Connection Pooling
+
+Lambda instances scale horizontally. Each instance holds exactly one DB connection:
+
+```python
+engine = create_async_engine(
+    settings.database_url,
+    pool_size=1,
+    max_overflow=0,
+    pool_pre_ping=True,
+)
+```
+
+### 9) Security Architecture
+
+- Lambda VPC placement: private subnets, security group allows outbound to RDS on port 5432
+- RDS security group: inbound 5432 from Lambda security group only
+- S3 documents bucket: private; Lambda IAM role has `s3:PutObject` + `s3:GetObject`
+- CORS: handled entirely in FastAPI `CORSMiddleware` — API Gateway does NOT add CORS headers
+- JWT: HS256, validated in `TenantContextMiddleware` on every protected request
+- Public paths bypass middleware: `/api/auth/*`, `/api/health*`, `/api/doctors`, `/api/doctors/register`, `/api/admin/register`, `/api/doctor/availability/*`
+
+### 10) CloudWatch Log Group
+
+```
+/aws/lambda/healthcare-backend-backend
+```
+
+Tail logs during troubleshooting:
+```bash
+MSYS_NO_PATHCONV=1 aws logs tail /aws/lambda/healthcare-backend-backend \
+  --follow --region us-east-1
+```
+
+### 11) Known Pitfalls (must include prevention)
+
+| Pitfall | Symptom | Prevention |
+|---------|---------|-----------|
+| Wrong CloudFront origin request policy | `/api/*` returns HTML | Use `AllViewerExceptHostHeader` on `/api/*` behavior |
+| NoEcho params in samconfig.toml | Params missing on next deploy | Always pass via `--parameter-overrides` |
+| Windows PowerShell multi-line override | Parse error on deploy | Put all overrides on one line |
+| Named IAM role in SAM template | `CAPABILITY_NAMED_IAM` error | Remove `RoleName` from IAM resource |
+| Stack in ROLLBACK_COMPLETE | Can't deploy | Delete stack and redeploy from scratch |
+| Lambda can't reach RDS | DB disconnected | Check SG inbound/outbound rules on port 5432 |
+| CORS blocked on API call | Browser CORS error | `CORS_ORIGINS` env var must exactly match CloudFront domain |
+| Duplicate CORS headers | API returns CORS header twice | Never configure CORS at API Gateway — FastAPI only |
+
+### 12) CI/CD Behavior to Recreate
+
+**Backend pipeline** (on push to `main`, path filter `healthcare_saas_app/backend/**`):
+1. Lint (`ruff check`) + type check (`mypy`)
+2. Unit tests (`pytest`) with PostgreSQL service container
+3. `sam build` + `sam validate`
+4. Apply SQL migrations via `psql` (before code deploy)
+5. `sam deploy --no-confirm-changeset --parameter-overrides ...` (DatabaseUrl + JwtSecret from GitHub secrets)
+
+**Frontend pipeline** (on push to `main`, path filter `healthcare_saas_app/frontend/**`):
+1. Lint + type check (`npx tsc --noEmit`)
+2. Unit tests (`npm run test`)
+3. `npm run build`
+4. `aws s3 sync dist/ s3://<bucket> --delete`
+5. `aws cloudfront create-invalidation --distribution-id <id> --paths "/*"`
+
+### 13) Deliverables Required from You (the agent)
+
 Produce all of the following:
-1. **Architecture diagram (ASCII or Mermaid)** matching current flow.
-2. **IaC-style artifacts** (or AWS CLI scripts) for:
-   - ALB, target group, listeners
-   - ECS task/service
-   - Security groups
-   - CloudFront behavior setup (`/api/*` + default)
-3. **Secrets setup instructions** with explicit plaintext format examples.
-4. **GitHub Actions variable/secret matrix** (required values, where used).
-5. **Deployment runbook** (ordered, copy-paste commands).
-6. **Smoke test checklist** for Patient, Doctor, Admin flows.
-7. **Rollback plan** for backend and frontend.
 
-### 11) Validation Criteria
-Your output is only acceptable if all checks pass:
-- `POST /api/auth/login` succeeds without requiring prior Authorization header.
-- Frontend login works via CloudFront URL.
-- Patient dashboard data loads.
-- Doctors list loads in appointment scheduling.
-- Doctor search pages return expected data.
-- Admin routes function.
-- No API request returns frontend HTML unexpectedly.
+1. **Architecture diagram (Mermaid)** matching current CloudFront → API Gateway → Lambda → RDS flow
+2. **SAM template** (`backend/template.yaml`) with all parameters, globals, function, and IAM role
+3. **GitHub Actions workflows** for backend (SAM) and frontend (S3) deployments
+4. **GitHub Actions secrets matrix** — every secret name, where it's used, format
+5. **Deployment runbook** — ordered copy-paste commands for first deploy and subsequent deploys
+6. **Smoke test checklist** — health check, login (PATIENT/DOCTOR/ADMIN), appointment booking
+7. **Rollback plan** — backend (CloudFormation rollback) and frontend (S3 re-sync)
+8. **CloudFront configuration** — both behaviors with exact policy names/IDs
 
-### 12) Output Format
-Return these sections in order:
-1. Assumptions & parameters table
-2. Target AWS architecture
-3. Infrastructure provisioning steps
-4. CI/CD setup
-5. Runtime configuration (env + secrets)
-6. CloudFront routing and cache strategy
-7. Verification and troubleshooting
-8. Rollback
+### 14) Validation Criteria
 
----
+Output is only acceptable if all checks pass:
+- `POST /api/auth/login` succeeds without requiring prior Authorization header
+- `GET /api/health` returns `{"status":"healthy","database":"connected"}`
+- Frontend loads at CloudFront domain
+- Patient dashboard data loads after login
+- Doctor availability slots load in appointment scheduling
+- No API request unexpectedly returns HTML
+- Admin routes return data for ADMIN-role tokens; return 403 for PATIENT/DOCTOR tokens
 
-## Maintainer Notes
-This specification reflects the current working architecture after production fixes related to CloudFront routing limits and `/api` proxy consolidation.
+### 15) Output Format
+
+Return sections in this order:
+1. Architecture diagram
+2. SAM template
+3. Lambda entry point and DB pooling
+4. GitHub Actions workflows
+5. GitHub Actions secrets matrix
+6. CloudFront routing configuration
+7. Deployment runbook (first deploy + subsequent)
+8. Smoke test checklist
+9. Rollback plan
+10. Known pitfalls and mitigations

@@ -1,228 +1,119 @@
-# Prompt: Test Strategy
+## ADDED Requirements
 
-## Prompt
+### Requirement: Backend unit test coverage gate
+The backend test suite SHALL use `pytest` with `pytest-asyncio` and `httpx` as the async test client. The overall coverage gate SHALL be at least 70%. The auth and RBAC modules SHALL achieve at least 90% coverage.
 
-Implement a full test suite covering unit, integration, end-to-end, and security testing for this Healthcare SaaS application.
-
----
-
-### Test Pyramid
-
-```
-        /‾‾‾‾‾‾‾‾‾‾‾‾\
-       /  E2E (Playwright) \       ← Few, critical user journeys
-      /____________________\
-     /  Integration Tests   \      ← API contracts, RBAC, tenant isolation
-    /________________________\
-   /   Unit Tests             \    ← Business logic, auth, utilities
-  /____________________________\
-```
+#### Scenario: Coverage gate passes
+- **GIVEN** all backend unit tests pass
+- **WHEN** `pytest --cov` is run
+- **THEN** the overall coverage report SHALL show ≥ 70% and the coverage for `app/core/security.py` and `app/core/dependencies.py` SHALL show ≥ 90%
 
 ---
 
-### Backend Unit Tests (pytest)
+### Requirement: RBAC negative tests — wrong role returns 403
+The test suite SHALL include tests that verify each role-protected endpoint returns `403 Forbidden` when called by a user with an insufficient role.
 
-**Location:** `backend/tests/`
+#### Scenario: PATIENT cannot access admin endpoint
+- **GIVEN** a test client authenticated as a PATIENT
+- **WHEN** `GET /api/admin/users` is called
+- **THEN** the response status SHALL be 403
 
-**Tools:** `pytest`, `pytest-asyncio`, `httpx` (async test client)
-
-**Coverage target:** 70% minimum; 90%+ for auth and RBAC modules.
-
-Key test areas:
-
-```
-backend/tests/
-├── test_auth.py          # JWT creation/validation, password hashing, middleware
-├── test_rbac.py          # require_roles(): correct role, wrong role, cross-tenant
-├── test_appointments.py  # book, cancel, confirm, status lifecycle
-├── test_patients.py      # profile, medical history, prescriptions
-├── test_doctors.py       # profile, availability slots
-├── test_admin.py         # user management, reports
-├── test_storage.py       # S3 upload/download (mocked boto3)
-└── conftest.py           # DB fixtures, auth fixtures, test client
-```
-
-**Critical tests:**
-
-```python
-# test_rbac.py
-async def test_patient_cannot_access_admin_endpoint(client, patient_token):
-    response = await client.get("/api/admin/users", headers={"Authorization": f"Bearer {patient_token}"})
-    assert response.status_code == 403
-
-async def test_cross_tenant_access_blocked(client, tenant_a_token, tenant_b_patient_id):
-    response = await client.get(f"/api/patient/{tenant_b_patient_id}", headers={"Authorization": f"Bearer {tenant_a_token}"})
-    assert response.status_code in (403, 404)
-
-# test_auth.py
-async def test_login_wrong_password_returns_401(client):
-    response = await client.post("/api/auth/login", json={"email": "user@test.com", "password": "wrong"})
-    assert response.status_code == 401
-    assert response.json()["detail"] == "Invalid credentials"
-
-async def test_expired_token_returns_401(client, expired_token):
-    response = await client.get("/api/patient/me", headers={"Authorization": f"Bearer {expired_token}"})
-    assert response.status_code == 401
-```
+#### Scenario: DOCTOR cannot book appointments
+- **GIVEN** a test client authenticated as a DOCTOR
+- **WHEN** `POST /api/appointments` is called
+- **THEN** the response status SHALL be 403
 
 ---
 
-### Frontend Unit Tests (Vitest)
+### Requirement: Cross-tenant isolation tests
+The test suite SHALL include integration tests that verify cross-tenant access returns 403 or empty results and never returns foreign-tenant data.
 
-**Location:** `frontend/src/**/*.test.tsx`
-
-**Tools:** `vitest`, `@testing-library/react`, `msw` (mock service worker for API mocking)
-
-Key test areas:
-
-```
-frontend/src/
-├── hooks/useAuth.test.ts          # login, logout, token storage (never localStorage)
-├── hooks/useAppointments.test.ts  # booking, cancellation, cache invalidation
-├── components/common/
-│   ├── ProtectedRoute.test.tsx    # redirects unauthenticated, blocks wrong role
-│   └── StatusMessage.test.tsx
-└── utils/index.test.ts            # email validation, date formatting
-```
-
-**Critical tests:**
-
-```typescript
-// ProtectedRoute.test.tsx
-test("redirects to / when no token", () => {
-  render(<ProtectedRoute allowedRoles={["PATIENT"]} />);
-  expect(mockNavigate).toHaveBeenCalledWith("/", { replace: true });
-});
-
-// useAuth.test.ts
-test("token is never stored in localStorage", () => {
-  login(mockLoginResponse);
-  expect(localStorage.getItem("token")).toBeNull();
-  expect(sessionStorage.getItem("token")).toBeNull();
-});
-```
+#### Scenario: Tenant A token blocked from Tenant B resource
+- **GIVEN** a token for a user in Tenant A and the ID of a resource belonging to Tenant B
+- **WHEN** the Tenant A token is used to request the Tenant B resource
+- **THEN** the response status SHALL be 403 or 404 and the response body SHALL NOT contain any Tenant B data
 
 ---
 
-### Integration Tests
+### Requirement: Auth security tests
+The test suite SHALL include tests for: wrong password returning 401 with "Invalid credentials", expired token returning 401, and identical error messages for both "user not found" and "wrong password" (anti-enumeration).
 
-**Location:** `backend/tests/integration/` (pytest with real DB) or `healthcare_saas_app/` level
+#### Scenario: Wrong password returns 401
+- **GIVEN** a real user account in the system
+- **WHEN** `POST /auth/login` is called with the correct email and wrong password
+- **THEN** the response SHALL be `401 {"detail": "Invalid credentials"}`
 
-**Tools:** pytest, PostgreSQL test database (ephemeral, created per test run)
+#### Scenario: Non-existent user returns same 401 message
+- **GIVEN** an email that does not exist in the system
+- **WHEN** `POST /auth/login` is called with that email
+- **THEN** the response SHALL be `401 {"detail": "Invalid credentials"}` — identical to the wrong-password response
 
-Test the full request-to-database path:
-
-```python
-# test_appointment_flow.py
-async def test_full_booking_flow(client, patient_token, doctor_id, slot_id):
-    # 1. Patient books appointment
-    resp = await client.post("/api/appointments", json={"doctor_id": doctor_id, "slot_id": slot_id}, ...)
-    assert resp.status_code == 200
-    appointment_id = resp.json()["id"]
-
-    # 2. Slot is now BOOKED
-    slot = await db.get(DoctorAvailability, slot_id)
-    assert slot.status == SlotStatus.BOOKED
-
-    # 3. Doctor confirms
-    resp = await client.post(f"/api/appointments/{appointment_id}/confirm", headers=doctor_headers)
-    assert resp.status_code == 200
-
-    # 4. Patient cancels
-    resp = await client.delete(f"/api/appointments/{appointment_id}", headers=patient_headers)
-    assert resp.status_code == 200
-
-    # 5. Slot is back to AVAILABLE
-    await db.refresh(slot)
-    assert slot.status == SlotStatus.AVAILABLE
-```
+#### Scenario: Expired token returns 401
+- **GIVEN** a JWT whose `exp` claim is in the past
+- **WHEN** a protected endpoint is called with that token
+- **THEN** the response SHALL be `401 Unauthorized`
 
 ---
 
-### End-to-End Tests (Playwright)
+### Requirement: Frontend unit tests with Vitest
+Frontend unit tests SHALL use Vitest with `@testing-library/react` and `msw` for API mocking. The test suite SHALL cover: `useAuth` hook (login, logout, token storage), `ProtectedRoute` component (redirect on no token, redirect on wrong role), and utility functions in `utils/index.ts`.
 
-**Location:** `healthcare_saas_app/playwright.simple.config.ts`
+#### Scenario: ProtectedRoute redirects when no token
+- **GIVEN** no authenticated session (token is null)
+- **WHEN** `ProtectedRoute` with `allowedRoles={["PATIENT"]}` renders
+- **THEN** `mockNavigate` SHALL have been called with `"/"` and `{ replace: true }`
 
-**Requirement:** Both backend (port 8000) and frontend (port 5173) must be running.
-
-Critical journeys:
-
-```typescript
-// e2e/patient-booking.spec.ts
-test("patient books and cancels appointment", async ({ page }) => {
-  await page.goto("/");
-  await page.fill("[name=email]", "patient@test.com");
-  await page.fill("[name=password]", "Password123");
-  await page.click("[type=submit]");
-  await page.waitForURL("**/patient/appointments");
-  // ... book appointment
-  // ... verify it appears in list
-  // ... cancel it
-});
-
-// e2e/doctor-workflow.spec.ts
-test("doctor sets availability and views appointments", async ({ page }) => { ... });
-
-// e2e/admin-user-management.spec.ts
-test("admin deletes and restores a user", async ({ page }) => { ... });
-```
+#### Scenario: Token never stored in browser storage
+- **GIVEN** a successful login response
+- **WHEN** `login(mockLoginResponse)` is called
+- **THEN** `localStorage.getItem("token")` SHALL be null and `sessionStorage.getItem("token")` SHALL be null
 
 ---
 
-### Security Tests
+### Requirement: Integration test for full appointment booking flow
+The test suite SHALL include an integration test that exercises the complete booking flow against a real (test) PostgreSQL database: patient books appointment → slot becomes BOOKED → doctor confirms → patient cancels → slot reverts to AVAILABLE.
 
-Included in pytest (backend):
-
-```python
-# test_security.py
-async def test_sql_injection_in_email(client):
-    resp = await client.post("/api/auth/login", json={"email": "' OR 1=1 --", "password": "x"})
-    assert resp.status_code in (401, 422)  # never 200
-
-async def test_rate_limit_on_login(client):
-    for _ in range(15):
-        await client.post("/api/auth/login", json={"email": "x@x.com", "password": "wrong"})
-    resp = await client.post("/api/auth/login", json={"email": "x@x.com", "password": "wrong"})
-    assert resp.status_code == 429
-
-async def test_no_account_enumeration(client):
-    resp1 = await client.post("/api/auth/login", json={"email": "nonexistent@test.com", "password": "wrong"})
-    resp2 = await client.post("/api/auth/login", json={"email": "real@test.com", "password": "wrong"})
-    assert resp1.json()["detail"] == resp2.json()["detail"]  # same error message
-```
+#### Scenario: Full appointment lifecycle
+- **GIVEN** a test database with a doctor, patient, and an AVAILABLE slot
+- **WHEN** the patient books, the doctor confirms, and the patient cancels the appointment
+- **THEN** the appointment status SHALL follow SCHEDULED → CONFIRMED → CANCELLED and the slot status SHALL end at AVAILABLE
 
 ---
 
-### CI Gates
+### Requirement: Playwright E2E tests for critical user journeys
+The project SHALL include Playwright E2E tests for: patient books and cancels an appointment, doctor sets availability and views appointments, admin deletes and restores a user. These tests SHALL run against live local backend (port 8000) and frontend (port 5173).
 
-Minimum gates before merge:
-
-| Check | Tool | Gate |
-|-------|------|------|
-| Backend lint | `ruff check` | Must pass |
-| Backend type check | `mypy` | Must pass |
-| Backend unit tests | `pytest` | Must pass, ≥ 70% coverage |
-| Frontend type check | `tsc --noEmit` | Must pass |
-| Frontend unit tests | `vitest` | Must pass |
-| Frontend build | `npm run build` | Must pass |
-| E2E smoke suite | `playwright` | Critical paths must pass |
-| Secrets scan | `gitleaks` or equivalent | Must pass |
+#### Scenario: Patient booking journey passes
+- **GIVEN** the backend and frontend are running locally
+- **WHEN** the Playwright test navigates to `/`, logs in as a patient, and completes the booking flow
+- **THEN** the new appointment SHALL appear in the appointments list and the test SHALL pass without assertion failures
 
 ---
 
-### Deliverables
+### Requirement: Security tests for injection and rate limiting
+The test suite SHALL include: SQL injection attempt in the login email field (must return 401 or 422, never 200), rate limit test for the login endpoint (16th request within 1 minute must return 429).
 
-- `backend/tests/` — all unit and integration test files
-- `backend/tests/conftest.py` — database fixtures, auth token fixtures, test client setup
-- `frontend/src/**/*.test.tsx` — component and hook tests
-- `healthcare_saas_app/playwright.simple.config.ts` — Playwright E2E config
-- `healthcare_saas_app/e2e/` or `frontend/tests/e2e/` — E2E test specs
+#### Scenario: SQL injection rejected
+- **GIVEN** a login request with `email: "' OR 1=1 --"` and any password
+- **WHEN** `POST /auth/login` is called
+- **THEN** the response status SHALL be 401 or 422 and SHALL NOT be 200
 
-### Acceptance Criteria
+#### Scenario: Rate limit triggered on login
+- **GIVEN** 15 consecutive login attempts with invalid credentials from the same IP
+- **WHEN** the 16th attempt is made
+- **THEN** the response status SHALL be 429
 
-- All unit tests pass with `pytest` and `npm run test`.
-- Full-booking integration test passes against a real (test) database.
-- E2E patient booking journey passes end-to-end.
-- RBAC negative tests pass (wrong role → 403).
-- Cross-tenant isolation tests pass.
-- No secrets appear in test fixtures.
+---
+
+### Requirement: CI gates must pass before merge
+The following checks SHALL all pass before any code is merged to `main`: `ruff check` (backend lint), `mypy app/` (backend type check), `pytest` with ≥ 70% coverage, `npx tsc --noEmit` (frontend type check), `npm run test` (frontend unit tests), `npm run build` (frontend build), Playwright critical paths, and a secrets scan.
+
+#### Scenario: Linting failure blocks merge
+- **GIVEN** a pull request with a Python style violation detected by `ruff`
+- **WHEN** the CI pipeline runs
+- **THEN** the lint check SHALL fail and the PR SHALL NOT be mergeable until the violation is fixed
+
+#### Scenario: Type error blocks merge
+- **GIVEN** a pull request introducing a TypeScript type error
+- **WHEN** `npx tsc --noEmit` runs in CI
+- **THEN** the type check SHALL fail and the PR SHALL NOT be mergeable

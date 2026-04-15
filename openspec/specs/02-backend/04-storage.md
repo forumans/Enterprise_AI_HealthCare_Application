@@ -1,195 +1,79 @@
-# Prompt: S3 Document Storage
+## ADDED Requirements
 
-## Prompt
+### Requirement: Patient documents stored in S3, never on Lambda filesystem
+The system SHALL upload patient documents directly to S3 using an in-memory byte stream. Files SHALL NOT be written to the Lambda filesystem (`/tmp` or any other path). The S3 object key SHALL follow the format `documents/<tenant_id>/<patient_id>/<timestamp>_<sanitised_filename>`.
 
-Implement patient document upload and retrieval using AWS S3. Lambda has an ephemeral filesystem (`/tmp`, max 512 MB) — never write patient files to disk. All uploads go directly to S3; downloads return presigned URLs.
+#### Scenario: Document upload goes to S3
+- **GIVEN** a patient uploads a file via `POST /patient/documents`
+- **WHEN** the upload handler processes the request
+- **THEN** the file bytes SHALL be sent to S3 via `put_object` and no temporary file SHALL be created on the Lambda filesystem
 
----
-
-### S3 Key Format
-
-```
-documents/<tenant_id>/<patient_id>/<timestamp>_<original_filename>
-```
-
-Example: `documents/abc-tenant-uuid/def-patient-uuid/1704067200_lab_report.pdf`
-
-This structure allows:
-- Tenant-level IAM policy restrictions
-- Patient-level listing without a DB query
-- Collision-free filenames via timestamp prefix
+#### Scenario: S3 key format is correct
+- **GIVEN** a patient in tenant `abc-uuid` with patient ID `def-uuid` uploading `lab report.pdf`
+- **WHEN** the upload handler constructs the S3 key
+- **THEN** the key SHALL match the pattern `documents/abc-uuid/def-uuid/<unix_timestamp>_lab_report.pdf` with the filename sanitised (spaces replaced, special characters removed)
 
 ---
 
-### Storage Utility (`backend/app/core/storage.py`)
+### Requirement: Module-level S3 client singleton
+The boto3 S3 client SHALL be instantiated once at module level in `backend/app/core/storage.py`. It SHALL NOT be created per request. This pattern reuses the existing SSL connection and DNS resolution across warm Lambda invocations.
 
-```python
-import boto3
-import os
-from botocore.exceptions import ClientError
-
-# Module-level singleton — reused across warm Lambda invocations
-_s3_client = boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1"))
-
-def upload_document(
-    file_bytes: bytes,
-    key: str,
-    content_type: str = "application/octet-stream",
-    bucket: str | None = None,
-) -> str:
-    """Upload bytes to S3. Returns the S3 key."""
-    bucket = bucket or settings.s3_bucket_name
-    _s3_client.put_object(
-        Bucket=bucket,
-        Key=key,
-        Body=file_bytes,
-        ContentType=content_type,
-    )
-    return key
-
-def generate_presigned_url(
-    key: str,
-    expiry_seconds: int = 3600,
-    bucket: str | None = None,
-) -> str:
-    """Generate a presigned GET URL valid for expiry_seconds."""
-    bucket = bucket or settings.s3_bucket_name
-    return _s3_client.generate_presigned_url(
-        "get_object",
-        Params={"Bucket": bucket, "Key": key},
-        ExpiresIn=expiry_seconds,
-    )
-```
-
-**Why module-level client:** boto3 client creation involves SSL handshake and DNS. Creating it once per execution environment (not per request) significantly reduces latency on warm invocations.
+#### Scenario: S3 client reused across warm invocations
+- **GIVEN** a Lambda execution environment that has processed at least one request
+- **WHEN** a second document upload request arrives
+- **THEN** the same module-level `_s3_client` instance SHALL be used, not a newly created client
 
 ---
 
-### Document Upload Endpoint
+### Requirement: Presigned URLs for document downloads
+WHEN a patient retrieves their document list via `GET /patient/documents`, each document entry SHALL include a `download_url` field containing a presigned S3 GET URL. The URL SHALL expire after 3600 seconds. Clients SHALL NOT cache presigned URLs longer than their expiry.
 
-The upload endpoint reads the file into memory (not to disk), builds the S3 key, uploads, then saves the metadata record.
+#### Scenario: Presigned URL in document list
+- **GIVEN** a patient with documents stored in S3
+- **WHEN** `GET /patient/documents` is called
+- **THEN** each document in the response SHALL include a non-empty `download_url` that resolves to the correct S3 object and expires in 3600 seconds
 
-```python
-# backend/app/api/routes/patients.py
-
-@router.post("/patient/documents")
-async def upload_document(
-    file: UploadFile,
-    identity: CurrentIdentity = Depends(require_roles("PATIENT")),
-    db: AsyncSession = Depends(get_db),
-):
-    # Read into memory — Lambda has no persistent filesystem
-    file_bytes = await file.read()
-
-    # Enforce upload size limit (default 10 MB)
-    if len(file_bytes) > settings.max_upload_size:
-        raise HTTPException(413, "File too large")
-
-    # Build S3 key
-    timestamp = int(datetime.utcnow().timestamp())
-    safe_name = secure_filename(file.filename)
-    key = f"documents/{identity.tenant_id}/{patient.id}/{timestamp}_{safe_name}"
-
-    # Upload to S3
-    upload_document(file_bytes, key, content_type=file.content_type)
-
-    # Save metadata to DB
-    doc = PatientDocument(
-        tenant_id=identity.tenant_id,
-        patient_id=patient.id,
-        document_name=file.filename,
-        document_type=file.content_type,
-        file_path=key,
-    )
-    db.add(doc)
-    await db.commit()
-
-    return {"id": str(doc.id), "document_name": doc.document_name, "created_at": doc.created_at}
-```
+#### Scenario: Expired presigned URL rejected by S3
+- **GIVEN** a presigned URL that has passed its expiry time
+- **WHEN** the client attempts to use the URL to download the document
+- **THEN** S3 SHALL reject the request with 403 — the system does not need to handle this; the client should call the list endpoint again to obtain a fresh URL
 
 ---
 
-### Document List Endpoint
+### Requirement: File size limit enforced server-side
+The system SHALL reject document uploads whose file size exceeds `MAX_UPLOAD_SIZE` bytes (default 10 MB). The size check SHALL occur after reading the file into memory. IF the file exceeds the limit the system SHALL return `413 Request Entity Too Large`.
 
-When listing documents, generate a presigned URL for each so the client can download directly from S3 without routing through Lambda.
+#### Scenario: File within size limit accepted
+- **GIVEN** `MAX_UPLOAD_SIZE` is 10,485,760 bytes (10 MB)
+- **WHEN** a patient uploads a 5 MB PDF
+- **THEN** the system SHALL accept the file and upload it to S3
 
-```python
-@router.get("/patient/documents")
-async def list_documents(...):
-    docs = await get_patient_documents(db, identity)
-    return [
-        {
-            "id": str(doc.id),
-            "document_name": doc.document_name,
-            "document_type": doc.document_type,
-            "created_at": doc.created_at,
-            "download_url": generate_presigned_url(doc.file_path, expiry_seconds=3600),
-        }
-        for doc in docs
-    ]
-```
-
-Presigned URLs expire after 1 hour. Clients should not cache them longer than that.
+#### Scenario: File exceeding size limit rejected
+- **GIVEN** `MAX_UPLOAD_SIZE` is 10,485,760 bytes
+- **WHEN** a patient attempts to upload a 15 MB file
+- **THEN** the system SHALL return `413 Request Entity Too Large` and SHALL NOT upload anything to S3
 
 ---
 
-### IAM Policy
+### Requirement: File type validation server-side
+The system SHALL validate the `Content-Type` of uploaded files against an allowlist: `application/pdf`, `image/jpeg`, `image/png`, `image/tiff`, `text/plain`. IF the content type is not in the allowlist the system SHALL return `415 Unsupported Media Type`. The server SHALL NOT rely solely on the client-provided `Content-Type` header.
 
-The Lambda execution role needs these permissions on the documents bucket:
+#### Scenario: PDF upload accepted
+- **GIVEN** a patient uploads a file with content type `application/pdf`
+- **WHEN** the upload handler validates the content type
+- **THEN** the upload SHALL proceed
 
-```json
-{
-  "Effect": "Allow",
-  "Action": ["s3:PutObject", "s3:GetObject"],
-  "Resource": "arn:aws:s3:::healthcare-patient-documents/*"
-}
-```
-
-This is handled by the SAM template's `S3CrudPolicy` in `backend/template.yaml`.
-
----
-
-### Environment Variables
-
-| Variable | Description |
-|----------|-------------|
-| `S3_BUCKET_NAME` | Name of the patient documents S3 bucket |
-| `MAX_UPLOAD_SIZE` | Maximum file size in bytes (default `10485760` = 10 MB) |
-| `AWS_REGION` | Region where the bucket lives (default `us-east-1`) |
+#### Scenario: Disallowed file type rejected
+- **GIVEN** a patient attempts to upload a file with content type `application/zip`
+- **WHEN** the upload handler validates the content type
+- **THEN** the system SHALL return `415 Unsupported Media Type` and SHALL NOT store the file
 
 ---
 
-### File Type Validation
+### Requirement: Lambda execution role has S3 permissions
+The Lambda execution role SHALL have `s3:PutObject` and `s3:GetObject` permissions scoped to the patient documents S3 bucket ARN (`arn:aws:s3:::healthcare-patient-documents/*`). The SAM template SHALL grant these via `S3CrudPolicy`.
 
-Validate content type server-side — never trust the client's `Content-Type` header alone:
-
-```python
-ALLOWED_CONTENT_TYPES = {
-    "application/pdf",
-    "image/jpeg",
-    "image/png",
-    "image/tiff",
-    "text/plain",
-}
-
-if file.content_type not in ALLOWED_CONTENT_TYPES:
-    raise HTTPException(415, "Unsupported file type")
-```
-
----
-
-### Deliverables
-
-- `backend/app/core/storage.py` — `upload_document()` and `generate_presigned_url()`
-- Document upload and list endpoints in `backend/app/api/routes/patients.py`
-- File type and size validation
-- `backend/tests/test_storage.py` — unit tests with mocked S3 client
-
-### Acceptance Criteria
-
-- `POST /patient/documents` uploads the file to S3 and saves metadata to DB.
-- `GET /patient/documents` returns documents with valid presigned `download_url` fields.
-- Files larger than `MAX_UPLOAD_SIZE` are rejected with 413.
-- Unsupported file types are rejected with 415.
-- No patient file is written to the Lambda filesystem (`/tmp` or otherwise).
-- S3 client is instantiated at module level (not per request).
+#### Scenario: Upload succeeds with correct IAM role
+- **GIVEN** the Lambda execution role has the required S3 permissions
+- **WHEN** the upload handler calls `_s3_client.put_object()`
+- **THEN** the call SHALL succeed without an AccessDenied error

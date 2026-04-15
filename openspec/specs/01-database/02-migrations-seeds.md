@@ -1,307 +1,89 @@
-# Prompt: Database Schema Delivery and Seeding
+## ADDED Requirements
 
-## Prompt
+### Requirement: No Alembic — SQL-file-based migrations only
+The system SHALL manage schema changes exclusively through versioned SQL files in `backend/migrations/`. Alembic SHALL NOT be used. `alembic` SHALL NOT appear in `requirements.txt`.
 
-You are responsible for database schema delivery and seed data in `backend/`. Implement a migration-first workflow using plain SQL files and safe seed data generation. This project does NOT use Alembic — schema is managed via versioned SQL scripts applied manually or in CI.
+#### Scenario: New migration authored
+- **GIVEN** a schema change is required
+- **WHEN** a developer authors the migration
+- **THEN** the change SHALL be written as a new `.sql` file named `NNN_description.sql` in `backend/migrations/`, where `NNN` is a zero-padded sequence number
 
----
-
-### Schema Delivery Strategy
-
-There are two modes, controlled by the `DB_SCHEMA_INIT_ON_STARTUP` environment variable:
-
-| Mode | When used | Behavior |
-|------|-----------|---------|
-| `DB_SCHEMA_INIT_ON_STARTUP=true` | Local development only | FastAPI auto-creates all tables on startup via SQLAlchemy `create_all` |
-| `DB_SCHEMA_INIT_ON_STARTUP=false` | Production (Lambda) | Tables must already exist; schema managed via SQL migration scripts |
-
-**Never set `DB_SCHEMA_INIT_ON_STARTUP=true` in production.** The Lambda function must start against a pre-existing schema.
+#### Scenario: Alembic not present
+- **GIVEN** the project repository
+- **WHEN** `requirements.txt` is inspected
+- **THEN** `alembic` SHALL NOT appear as a dependency
 
 ---
 
-### Migration File Conventions
+### Requirement: Migration file idempotency
+Each migration file SHALL use `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`, and `CREATE TYPE IF NOT EXISTS` guards so that running the same file twice against an already-migrated database produces no errors.
 
-Location: `backend/migrations/`
-
-Naming: `NNN_description.sql` where `NNN` is a zero-padded sequence number.
-
-```
-backend/migrations/
-├── 001_initial_schema.sql        # All tables, enums, indexes, foreign keys
-├── 002_add_pharmacy_table.sql    # Example additive migration
-└── 003_add_slot_block_reason.sql # Example column addition
-```
-
-Each migration file must:
-- Be idempotent where possible (`CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`)
-- Only add or modify — never DROP a column or table in the same migration that adds new ones
-- Be backward-compatible with the previous running Lambda version (old code + new schema must work)
-- Apply in order — `001` before `002` before `003`
+#### Scenario: Re-run migration on existing schema
+- **GIVEN** `001_initial_schema.sql` has already been applied to a database
+- **WHEN** the same file is applied again (e.g. in CI retries)
+- **THEN** the system SHALL complete without errors and the schema SHALL be unchanged
 
 ---
 
-### Initial Schema (`001_initial_schema.sql`)
+### Requirement: Backward-compatible migrations
+Each migration SHALL be backward-compatible with the previous running Lambda version. Old application code SHALL continue to function against the new schema. A single migration file SHALL NOT both add a new column and drop an existing column.
 
-The initial migration must create all entities in dependency order:
-
-```sql
--- 1. Enable UUID generation
-CREATE EXTENSION IF NOT EXISTS "pgcrypto";
-
--- 2. Enums
-CREATE TYPE user_role AS ENUM ('ADMIN', 'DOCTOR', 'PATIENT');
-CREATE TYPE slot_status AS ENUM ('AVAILABLE', 'BOOKED', 'BLOCKED');
-CREATE TYPE appointment_status AS ENUM ('SCHEDULED', 'CONFIRMED', 'CANCELLED', 'COMPLETED');
-
--- 3. tenants (root entity, no FK dependencies)
-CREATE TABLE IF NOT EXISTS tenants (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name VARCHAR(255) NOT NULL,
-    domain VARCHAR(255) UNIQUE,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
-);
-
--- 4. users
-CREATE TABLE IF NOT EXISTS users (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID NOT NULL REFERENCES tenants(id),
-    email VARCHAR(255) NOT NULL,
-    password_hash TEXT NOT NULL,
-    role user_role NOT NULL,
-    is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    deleted_at TIMESTAMP,
-    deleted_by UUID REFERENCES users(id),
-    UNIQUE (tenant_id, email)
-);
-
--- 5. doctors
-CREATE TABLE IF NOT EXISTS doctors (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID NOT NULL REFERENCES tenants(id),
-    user_id UUID NOT NULL UNIQUE REFERENCES users(id),
-    full_name VARCHAR(255) NOT NULL,
-    specialty VARCHAR(255),
-    license_number VARCHAR(100),
-    phone VARCHAR(20),
-    date_of_birth DATE,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    deleted_at TIMESTAMP,
-    deleted_by UUID REFERENCES users(id)
-);
-
--- 6. patients
-CREATE TABLE IF NOT EXISTS patients (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID NOT NULL REFERENCES tenants(id),
-    user_id UUID NOT NULL UNIQUE REFERENCES users(id),
-    full_name VARCHAR(255) NOT NULL,
-    phone VARCHAR(50),
-    insurance_provider VARCHAR(255),
-    insurance_policy_number VARCHAR(255),
-    date_of_birth DATE,
-    gender VARCHAR(20),
-    address_line1 VARCHAR(255),
-    address_line2 VARCHAR(255),
-    city VARCHAR(100),
-    state VARCHAR(100),
-    postal_code VARCHAR(20),
-    country VARCHAR(100),
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    deleted_at TIMESTAMP,
-    deleted_by UUID REFERENCES users(id)
-);
-
--- 7. admins
-CREATE TABLE IF NOT EXISTS admins (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID NOT NULL REFERENCES tenants(id),
-    user_id UUID NOT NULL UNIQUE REFERENCES users(id),
-    full_name VARCHAR(255) NOT NULL,
-    phone VARCHAR(50),
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    deleted_at TIMESTAMP,
-    deleted_by UUID REFERENCES users(id)
-);
-
--- 8. doctor_availability
-CREATE TABLE IF NOT EXISTS doctor_availability (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID NOT NULL REFERENCES tenants(id),
-    doctor_id UUID NOT NULL REFERENCES doctors(id),
-    slot_time TIMESTAMP NOT NULL,
-    status slot_status NOT NULL DEFAULT 'AVAILABLE',
-    block_reason TEXT,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
-);
-
--- 9. pharmacies
-CREATE TABLE IF NOT EXISTS pharmacies (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID NOT NULL REFERENCES tenants(id),
-    name VARCHAR(255) NOT NULL,
-    address TEXT,
-    phone TEXT,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    deleted_at TIMESTAMP,
-    deleted_by UUID REFERENCES users(id)
-);
-
--- 10. appointments
-CREATE TABLE IF NOT EXISTS appointments (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID NOT NULL REFERENCES tenants(id),
-    doctor_id UUID NOT NULL REFERENCES doctors(id),
-    patient_id UUID NOT NULL REFERENCES patients(id),
-    slot_id UUID REFERENCES doctor_availability(id),
-    appointment_time TIMESTAMP NOT NULL,
-    status appointment_status NOT NULL DEFAULT 'SCHEDULED',
-    notes TEXT,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    deleted_at TIMESTAMP,
-    deleted_by UUID REFERENCES users(id)
-);
-
--- 11. medical_records
-CREATE TABLE IF NOT EXISTS medical_records (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID NOT NULL REFERENCES tenants(id),
-    appointment_id UUID NOT NULL UNIQUE REFERENCES appointments(id),
-    symptoms TEXT,
-    diagnosis TEXT,
-    lab_results TEXT,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    deleted_at TIMESTAMP,
-    deleted_by UUID REFERENCES users(id)
-);
-
--- 12. prescriptions
-CREATE TABLE IF NOT EXISTS prescriptions (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID NOT NULL REFERENCES tenants(id),
-    medical_record_id UUID NOT NULL UNIQUE REFERENCES medical_records(id),
-    pharmacy_id UUID REFERENCES pharmacies(id),
-    medication_details TEXT,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    deleted_at TIMESTAMP,
-    deleted_by UUID REFERENCES users(id)
-);
-
--- 13. patient_documents
-CREATE TABLE IF NOT EXISTS patient_documents (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID NOT NULL REFERENCES tenants(id),
-    patient_id UUID NOT NULL REFERENCES patients(id),
-    document_name VARCHAR(255) NOT NULL,
-    document_type VARCHAR(100),
-    file_path TEXT NOT NULL,   -- S3 object key
-    signed_at TIMESTAMP,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    deleted_at TIMESTAMP,
-    deleted_by UUID REFERENCES users(id)
-);
-
--- 14. audit_logs (immutable — no soft delete)
-CREATE TABLE IF NOT EXISTS audit_logs (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID NOT NULL REFERENCES tenants(id),
-    table_name VARCHAR(100) NOT NULL,
-    record_id UUID NOT NULL,
-    action_type VARCHAR(20) NOT NULL,  -- INSERT, UPDATE, DELETE
-    old_data JSONB,
-    new_data JSONB,
-    performed_by UUID REFERENCES users(id),
-    performed_at TIMESTAMP NOT NULL DEFAULT NOW()
-);
-
--- Indexes for common query patterns
-CREATE INDEX IF NOT EXISTS idx_users_tenant_email ON users(tenant_id, lower(email));
-CREATE INDEX IF NOT EXISTS idx_users_tenant ON users(tenant_id);
-CREATE INDEX IF NOT EXISTS idx_doctors_tenant ON doctors(tenant_id);
-CREATE INDEX IF NOT EXISTS idx_patients_tenant ON patients(tenant_id);
-CREATE INDEX IF NOT EXISTS idx_appointments_tenant ON appointments(tenant_id);
-CREATE INDEX IF NOT EXISTS idx_appointments_patient ON appointments(patient_id);
-CREATE INDEX IF NOT EXISTS idx_appointments_doctor ON appointments(doctor_id);
-CREATE INDEX IF NOT EXISTS idx_appointments_status ON appointments(status);
-CREATE INDEX IF NOT EXISTS idx_doctor_availability_doctor ON doctor_availability(doctor_id, slot_time);
-CREATE INDEX IF NOT EXISTS idx_audit_logs_tenant ON audit_logs(tenant_id, performed_at);
-```
+#### Scenario: Deploy with zero downtime
+- **GIVEN** a migration that adds a new nullable column to `appointments`
+- **WHEN** the migration is applied while the previous Lambda version is still serving traffic
+- **THEN** the previous Lambda code SHALL continue to operate correctly because it does not reference the new column
 
 ---
 
-### Applying Migrations
+### Requirement: Migrations applied before Lambda deployment
+In CI/CD, database migrations SHALL be applied to RDS before the new Lambda code is deployed. The migration step SHALL use `psql` with credentials from GitHub secrets.
 
-**Local development:**
-```bash
-psql -U healthcare_user -d healthcare_saas_db_local \
-  -f migrations/001_initial_schema.sql
-```
-
-**Production (before each Lambda deploy):**
-```bash
-psql -h <rds-endpoint> -U <user> -d <dbname> \
-  -f migrations/001_initial_schema.sql
-# Apply any newer migration files in order:
-# -f migrations/002_*.sql
-# -f migrations/003_*.sql
-```
-
-**CI/CD — apply in GitHub Actions before `sam deploy`:**
-```bash
-psql -h $RDS_ENDPOINT -U $DB_USER -d $DB_NAME \
-  -f healthcare_saas_app/backend/migrations/001_initial_schema.sql
-```
+#### Scenario: CI/CD migration step ordering
+- **GIVEN** a GitHub Actions workflow for the backend
+- **WHEN** the pipeline runs on a push to `main`
+- **THEN** the `psql` migration step SHALL complete successfully before the `sam deploy` step begins
 
 ---
 
-### Seed Data
+### Requirement: Initial schema covers all 14 tables
+The `001_initial_schema.sql` migration SHALL create all 14 tables in correct foreign-key dependency order: `tenants`, `users`, `doctors`, `patients`, `admins`, `doctor_availability`, `pharmacies`, `appointments`, `medical_records`, `prescriptions`, `patient_documents`, `audit_logs`, and all required indexes and PostgreSQL enum types.
 
-**Purpose:** Non-PHI seed data for local development and integration tests.
+#### Scenario: Fresh database migration
+- **GIVEN** an empty PostgreSQL database
+- **WHEN** `001_initial_schema.sql` is applied via `psql`
+- **THEN** all 14 tables SHALL exist, all enum types SHALL be created, and all required indexes SHALL be present
 
-**Location:** `backend/scripts/`
-
-```
-backend/scripts/
-├── seed_dev_data.py       # Creates tenant, admin user, sample doctor and patient
-└── seed_test_data.py      # Minimal fixtures for test isolation
-```
-
-**Rules:**
-- No real patient-identifiable data (names, emails, phone numbers must be clearly synthetic)
-- Seeds must be deterministic — running twice produces the same state (use upsert, not plain insert)
-- Default credentials for seed users must be clearly marked as development-only and must not pass password complexity requirements for production
-
-**Example seed user structure:**
-```python
-# seed_dev_data.py
-SEED_TENANT = {"name": "Demo Clinic", "domain": "demo.local"}
-SEED_ADMIN = {"email": "admin@demo.local", "password": "DevOnly!123", "full_name": "Demo Admin"}
-SEED_DOCTOR = {"email": "doctor@demo.local", "password": "DevOnly!123", "full_name": "Demo Doctor", "specialty": "General Practice"}
-SEED_PATIENT = {"email": "patient@demo.local", "password": "DevOnly!123", "full_name": "Demo Patient"}
-```
+#### Scenario: Verify table count
+- **GIVEN** a database where `001_initial_schema.sql` has been applied
+- **WHEN** `\dt` is run in psql
+- **THEN** at least 14 tables SHALL be listed including `tenants`, `users`, `appointments`, and `audit_logs`
 
 ---
 
-### Constraints
+### Requirement: Deterministic seed data
+Seed scripts SHALL be deterministic: running the same script twice SHALL produce the same state. Seeds SHALL use `ON CONFLICT DO NOTHING` or upsert semantics. Seed data SHALL use clearly synthetic, non-PHI values (e.g. `demo.local` email domain).
 
-- No `alembic` dependency — do not add it to `requirements.txt`
-- No destructive schema operations (`DROP COLUMN`, `DROP TABLE`) without a corresponding explicit migration step
-- Test fixtures avoid any real PHI — names, emails, and IDs must be obviously synthetic
-- Seeding must not fail if the data already exists (use `ON CONFLICT DO NOTHING` or equivalent)
+#### Scenario: Seed script run twice
+- **GIVEN** a freshly migrated database
+- **WHEN** `seed_dev_data.py` is run twice consecutively
+- **THEN** no errors SHALL occur and the database SHALL contain exactly the same number of seeded rows after the second run as after the first
+
+#### Scenario: Seed data is non-PHI
+- **GIVEN** the seed scripts in `backend/scripts/`
+- **WHEN** the seed data values are reviewed
+- **THEN** all email addresses SHALL use the `demo.local` domain, all names SHALL be clearly synthetic (e.g. "Demo Doctor"), and no real patient-identifiable information SHALL appear
 
 ---
 
-### Deliverables
+### Requirement: Separate dev and test seed scripts
+The system SHALL provide `seed_dev_data.py` for local development (creates a tenant, admin, doctor, and patient) and `seed_test_data.py` for integration test fixtures. Test seed data SHALL be minimal and scoped to test isolation.
 
-- `backend/migrations/001_initial_schema.sql` — full initial schema
-- `backend/scripts/seed_dev_data.py` — dev environment seed script
-- `backend/scripts/seed_test_data.py` — test fixture seed script
-- `backend/docs/migrations-runbook.md` — how to author, apply, and verify migrations
+#### Scenario: Dev seed creates usable local environment
+- **GIVEN** a freshly migrated local database
+- **WHEN** `seed_dev_data.py` is executed
+- **THEN** a demo tenant, admin user, doctor user, and patient user SHALL be created and the application SHALL be immediately usable for local testing
 
-### Acceptance Criteria
-
-- Running `001_initial_schema.sql` against an empty PostgreSQL database creates all 14 tables
-- Running it again on the same database produces no errors (`IF NOT EXISTS` throughout)
-- `seed_dev_data.py` completes without errors on a freshly migrated database
-- Running seeds twice is idempotent
-- No Alembic imports or configuration files exist in the codebase
+#### Scenario: Test seed is minimal
+- **GIVEN** an integration test suite
+- **WHEN** `seed_test_data.py` is referenced as a fixture
+- **THEN** it SHALL create only the minimum data required for test isolation and SHALL NOT create unrelated records that could cause test interference

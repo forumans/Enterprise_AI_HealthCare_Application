@@ -1,220 +1,119 @@
-# Prompt: API Endpoints and Service Layer
+## ADDED Requirements
 
-## Prompt
+### Requirement: Dual-prefix route registration
+Every route SHALL be registered twice: once at its base path (e.g. `/health`) and once with the `/api` prefix (e.g. `/api/health`). This supports CloudFront proxying `/api/*` to API Gateway while also allowing direct Lambda invocation without the prefix.
 
-Implement all FastAPI routes and their corresponding service layer for this Healthcare SaaS backend. Every route is tenant-scoped and role-protected where appropriate.
+#### Scenario: API route accessible with /api prefix
+- **GIVEN** a running application
+- **WHEN** `GET /api/health` is requested
+- **THEN** the system SHALL return the same response as `GET /health`
 
----
-
-### Route Structure
-
-```
-backend/app/api/routes/
-├── auth.py          # register, login, forgot/reset password
-├── doctors.py       # doctor profile, availability, registration
-├── patients.py      # patient profile, medical history, prescriptions, documents
-├── appointments.py  # book, list, cancel, confirm, complete
-├── admin.py         # user management, reports, system
-└── health.py        # /health, /health/ready, /health/live
-
-backend/app/services/
-├── auth_service.py
-├── doctor_service.py
-├── patient_service.py
-├── appointment_service.py
-└── admin_service.py
-```
-
-Business logic lives in services; routes handle only HTTP concerns (validation, auth, response shaping).
+#### Scenario: API route accessible without /api prefix
+- **GIVEN** a running application
+- **WHEN** `GET /health` is requested
+- **THEN** the system SHALL return `{"status": "healthy", "database": "connected"}`
 
 ---
 
-### Health Endpoints (Public)
+### Requirement: Health endpoints
+The system SHALL expose three health endpoints: `GET /health` (liveness + DB check), `GET /health/ready` (readiness check including database), `GET /health/live` (simple liveness, no DB check). WHEN the database is unreachable, `GET /health` and `GET /health/ready` SHALL return status 503.
 
-| Method | Path | Response |
-|--------|------|----------|
-| `GET` | `/health` | `{"status":"healthy","database":"connected","version":"1.0.0"}` or 503 |
-| `GET` | `/health/ready` | `{"status":"ready","checks":{"database":true,"api":true}}` or 503 |
-| `GET` | `/health/live` | `{"status":"alive","timestamp":"..."}` |
+#### Scenario: Healthy system
+- **GIVEN** the application is running and RDS is reachable
+- **WHEN** `GET /health` is called
+- **THEN** the system SHALL return `{"status": "healthy", "database": "connected"}` with status 200
 
----
-
-### Auth Endpoints (Public)
-
-| Method | Path | Body | Response |
-|--------|------|------|----------|
-| `POST` | `/auth/register` | `{email, password, full_name}` | `{user_id, email, role, tenant_id}` |
-| `POST` | `/auth/login` | `{email, password}` | `{access_token, role, tenant_id, user_name, user_id}` |
-| `POST` | `/auth/forgot-password` | `{email}` | `{message: "If account exists, reset link sent"}` |
-| `POST` | `/auth/reset-password` | `{token, new_password}` | `{message: "Password updated"}` |
+#### Scenario: Database unreachable
+- **GIVEN** the database connection is unavailable
+- **WHEN** `GET /health` is called
+- **THEN** the system SHALL return `{"status": "unhealthy", "database": "disconnected"}` with status 503
 
 ---
 
-### Doctor Endpoints
+### Requirement: Appointment booking creates atomic slot reservation
+WHEN a patient books an appointment, the system SHALL atomically: (1) verify the `doctor_availability` slot is `AVAILABLE` and belongs to the same tenant, (2) create the `appointments` row with status `SCHEDULED`, and (3) update the slot status to `BOOKED`. Both writes SHALL occur in a single database transaction.
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `GET` | `/doctors` | Public | List all active doctors (id, name, specialty) |
-| `POST` | `/doctors/register` | Public | Register a new doctor account |
-| `GET` | `/doctors/me` | DOCTOR | Get own doctor profile |
-| `PUT` | `/doctor/profile` | DOCTOR | Update own profile (specialty, phone, etc.) |
-| `GET` | `/doctor/availability/{doctor_id}/ndays` | Public | Get available slots for doctor over N days |
-| `POST` | `/doctor/availability` | DOCTOR | Create availability slots |
-| `PUT` | `/doctor/availability/{slot_id}` | DOCTOR | Update slot status (BLOCKED, AVAILABLE) |
-| `GET` | `/doctor/appointments/all` | DOCTOR | All appointments for this doctor |
-| `GET` | `/doctor/appointments/today` | DOCTOR | Today's appointments |
-| `GET` | `/doctor/appointments/upcoming` | DOCTOR | Upcoming appointments |
-| `GET` | `/doctor/appointments/weekly` | DOCTOR | This week's appointments |
+#### Scenario: Successful appointment booking
+- **GIVEN** an AVAILABLE slot for a doctor in the same tenant as the patient
+- **WHEN** `POST /appointments` is called by an authenticated PATIENT
+- **THEN** an appointment SHALL be created with status SCHEDULED and the slot status SHALL become BOOKED in the same transaction
+
+#### Scenario: Booking an already-booked slot
+- **GIVEN** a slot with status BOOKED
+- **WHEN** a second patient attempts to book the same slot
+- **THEN** the system SHALL return 409 or 422 and SHALL NOT create a duplicate appointment
 
 ---
 
-### Patient Endpoints
+### Requirement: Appointment cancellation reverts slot
+WHEN an appointment is cancelled, the system SHALL set the appointment status to `CANCELLED` and SHALL revert the linked `doctor_availability` slot status from `BOOKED` back to `AVAILABLE`, all within a single database transaction.
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `GET` | `/patient/me` | PATIENT | Get own patient profile |
-| `PUT` | `/patient/profile` | PATIENT | Update own profile |
-| `GET` | `/patient/appointments/upcoming` | PATIENT | Upcoming appointments |
-| `GET` | `/patient/medical-history` | PATIENT | List medical records for this patient |
-| `GET` | `/patient/prescriptions` | PATIENT | List prescriptions for this patient |
-| `GET` | `/patient/documents` | PATIENT | List uploaded documents (with presigned download URLs) |
-| `POST` | `/patient/documents` | PATIENT | Upload a document (multipart/form-data) |
+#### Scenario: Patient cancels appointment
+- **GIVEN** a SCHEDULED or CONFIRMED appointment with a linked slot
+- **WHEN** the owning patient calls `DELETE /appointments/{id}`
+- **THEN** the appointment status SHALL become CANCELLED and the slot SHALL revert to AVAILABLE
 
----
-
-### Appointment Endpoints
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `POST` | `/appointments` | PATIENT | Book an appointment `{doctor_id, slot_id, appointment_time, notes}` |
-| `DELETE` | `/appointments/{id}` | PATIENT | Cancel own appointment (sets status=CANCELLED) |
-| `PUT` | `/appointments/{id}/status` | DOCTOR, ADMIN | Update status `{status: CONFIRMED|COMPLETED|CANCELLED}` |
-| `POST` | `/appointments/{id}/confirm` | DOCTOR | Confirm appointment |
-
-**Appointment status lifecycle:**
-```
-SCHEDULED → CONFIRMED → COMPLETED
-          ↘ CANCELLED
-```
-
-When an appointment is booked, the linked `doctor_availability` slot status changes from `AVAILABLE` → `BOOKED`.
-When an appointment is cancelled, the slot reverts to `AVAILABLE`.
+#### Scenario: Wrong patient cannot cancel
+- **GIVEN** an appointment owned by Patient A
+- **WHEN** Patient B calls `DELETE /appointments/{appointment_a_id}`
+- **THEN** the system SHALL return 403 or 404 and SHALL NOT cancel the appointment
 
 ---
 
-### Medical Records and Prescriptions
+### Requirement: Appointment status lifecycle enforcement
+Appointment status SHALL follow the lifecycle: `SCHEDULED → CONFIRMED → COMPLETED` with `CANCELLED` reachable from `SCHEDULED` or `CONFIRMED`. Transitions outside this path SHALL be rejected. Only DOCTOR or ADMIN SHALL call `PUT /appointments/{id}/status`.
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `POST` | `/medical-records` | DOCTOR | Create medical record for completed appointment `{appointment_id, symptoms, diagnosis, lab_results}` |
-| `POST` | `/prescriptions` | DOCTOR | Create prescription `{medical_record_id, pharmacy_id, medication_details}` |
-| `GET` | `/pharmacies` | DOCTOR, PATIENT, ADMIN | List available pharmacies |
+#### Scenario: Doctor confirms appointment
+- **GIVEN** an appointment in SCHEDULED status
+- **WHEN** the assigned doctor calls `POST /appointments/{id}/confirm`
+- **THEN** the appointment status SHALL become CONFIRMED
 
----
-
-### Admin Endpoints
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `POST` | `/admin/register` | Public | Register new admin account |
-| `GET` | `/admin/users` | ADMIN | List all users in tenant (with role/status filter) |
-| `DELETE` | `/admin/users/{id}` | ADMIN | Soft-delete a user |
-| `POST` | `/admin/users/{id}/restore` | ADMIN | Restore soft-deleted user |
-| `POST` | `/admin/reset-password` | ADMIN | Reset any user's password `{user_id, new_password}` |
-| `GET` | `/admin/appointments` | ADMIN | List all appointments in tenant |
-| `GET` | `/admin/reports` | ADMIN | System-level metrics and counts |
-| `GET` | `/admin/audit-logs` | ADMIN | Recent audit log entries |
+#### Scenario: Invalid status transition
+- **GIVEN** an appointment in COMPLETED status
+- **WHEN** any user attempts to set status back to SCHEDULED
+- **THEN** the system SHALL return 422 and SHALL NOT update the appointment
 
 ---
 
-### Standard Response Shapes
+### Requirement: Service layer isolates business logic
+All business logic SHALL live in service classes under `backend/app/services/`. Route handlers SHALL only perform HTTP concerns: request validation, dependency injection, and response shaping. Service methods SHALL accept `AsyncSession` and `CurrentIdentity`; they SHALL NOT accept raw `Request` objects.
 
-**Success (list):**
-```json
-[{ "id": "uuid", ... }]
-```
-
-**Success (single):**
-```json
-{ "id": "uuid", ... }
-```
-
-**Error:**
-```json
-{ "detail": "Human-readable error message" }
-```
-
-**Validation error (422):**
-```json
-{
-  "detail": [
-    { "loc": ["body", "email"], "msg": "invalid email", "type": "value_error" }
-  ]
-}
-```
+#### Scenario: Route delegates to service
+- **GIVEN** a `POST /appointments` request with valid data
+- **WHEN** the route handler executes
+- **THEN** the route handler SHALL call `AppointmentService.book(payload)` for business logic and SHALL NOT contain direct database queries in the route function body
 
 ---
 
-### Service Layer Pattern
+### Requirement: Audit log on every mutation
+Every INSERT, UPDATE, and DELETE operation on a business entity SHALL result in an `AuditLog` entry written in the same database transaction. The audit entry SHALL capture `table_name`, `record_id`, `action_type`, `old_data` (JSONB), `new_data` (JSONB), `performed_by`, and `performed_at`. Audit logs SHALL be append-only and SHALL NOT be soft-deleted.
 
-Services receive the `AsyncSession` and `CurrentIdentity` (tenant + role). They never accept raw request objects.
+#### Scenario: User update is audited
+- **GIVEN** an admin updating a user's profile
+- **WHEN** the update transaction commits
+- **THEN** an `audit_logs` row SHALL exist recording the old and new state, the action type `UPDATE`, and the admin's `user_id` as `performed_by`
 
-```python
-# backend/app/services/appointment_service.py
-class AppointmentService:
-    def __init__(self, db: AsyncSession, identity: CurrentIdentity): ...
-
-    async def book(self, payload: BookAppointmentSchema) -> Appointment:
-        # 1. Verify slot is AVAILABLE and belongs to same tenant
-        # 2. Create appointment record
-        # 3. Update slot status to BOOKED
-        # 4. Write audit log entry
-        # All in one transaction
-        ...
-
-    async def cancel(self, appointment_id: uuid.UUID) -> Appointment:
-        # 1. Verify appointment belongs to this patient's tenant
-        # 2. Verify patient owns the appointment (or is ADMIN)
-        # 3. Set status=CANCELLED, revert slot to AVAILABLE
-        # 4. Write audit log
-        ...
-```
+#### Scenario: Audit log cannot be deleted
+- **GIVEN** an audit log entry
+- **WHEN** any service or admin action attempts to delete or soft-delete it
+- **THEN** the system SHALL reject the operation — audit logs have no `deleted_at` column and no delete endpoint
 
 ---
 
-### Audit Logging
+### Requirement: All list endpoints scoped to tenant
+Every list endpoint (users, appointments, doctors, patients, documents, etc.) SHALL filter results by the `tenant_id` from the authenticated user's JWT. Cross-tenant data SHALL never appear in any list response.
 
-Every mutation (INSERT, UPDATE, DELETE) must write an `AuditLog` entry:
-
-```python
-async def write_audit(
-    db: AsyncSession,
-    tenant_id: uuid.UUID,
-    table_name: str,
-    record_id: uuid.UUID,
-    action_type: str,          # INSERT | UPDATE | DELETE
-    old_data: dict | None,
-    new_data: dict | None,
-    performed_by: uuid.UUID,
-): ...
-```
-
-Audit logs are append-only — never soft-deleted.
+#### Scenario: Admin lists tenant users
+- **GIVEN** two tenants with users in each
+- **WHEN** an ADMIN from Tenant A calls `GET /admin/users`
+- **THEN** the response SHALL contain only Tenant A users and SHALL NOT include any users from Tenant B
 
 ---
 
-### Deliverables
+### Requirement: Document list returns presigned download URLs
+WHEN a patient lists their uploaded documents via `GET /patient/documents`, each document entry in the response SHALL include a `download_url` field containing a presigned S3 GET URL valid for 1 hour. The URL SHALL allow the client to download the file directly from S3 without routing through Lambda.
 
-- `backend/app/api/routes/` — all route files listed above
-- `backend/app/services/` — all service files with business logic
-- `backend/app/api/schemas.py` (or per-domain schema files) — Pydantic request/response models
-- `backend/tests/` — tests for each route group covering happy path + auth errors + validation
-
-### Acceptance Criteria
-
-- Every route has a corresponding test.
-- A PATIENT token cannot call any admin or doctor-only endpoint (returns 403).
-- All list endpoints filter by `tenant_id` — cross-tenant data is never returned.
-- Booking an appointment marks the slot as BOOKED in the same transaction.
-- Cancelling an appointment reverts the slot to AVAILABLE.
-- Every mutation writes an audit log entry.
+#### Scenario: Document list with presigned URLs
+- **GIVEN** a patient with one or more uploaded documents
+- **WHEN** `GET /patient/documents` is called
+- **THEN** each document object SHALL include a non-empty `download_url` that expires in 3600 seconds and can be used to download the file from S3 directly

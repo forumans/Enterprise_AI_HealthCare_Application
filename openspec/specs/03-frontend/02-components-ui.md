@@ -1,158 +1,79 @@
-# Prompt: React Components and UI System
+## ADDED Requirements
 
-## Prompt
+### Requirement: No external icon libraries
+The frontend SHALL NOT import from `lucide-react`, `react-icons`, or any other icon package. Visual indicators SHALL use Unicode symbols (✓, ✕, +, →), short text labels, or CSS-styled indicators. This keeps the bundle small and avoids build dependency errors.
 
-Build a reusable component system for healthcare workflows. No external icon library — use text labels and Unicode symbols. No CSS framework dependency — use plain CSS or CSS modules.
-
----
-
-### Shared / Common Components
-
-#### `LabeledField.tsx`
-Form input wrapper that renders a label, the input, and a validation error message.
-
-```tsx
-interface LabeledFieldProps {
-  label: string;
-  error?: string;
-  required?: boolean;
-  children: React.ReactNode;
-}
-```
-
-#### `StatusMessage.tsx`
-Success or error banner shown after an action.
-
-```tsx
-interface StatusMessageProps {
-  type: 'success' | 'error' | 'info';
-  message: string;
-  onDismiss?: () => void;
-}
-```
-
-#### `ProtectedRoute.tsx`
-Role-aware route guard (see architecture spec).
+#### Scenario: Build has no icon library imports
+- **GIVEN** the frontend codebase
+- **WHEN** all import statements are inspected
+- **THEN** no import from `lucide-react`, `react-icons`, `heroicons`, or any icon package SHALL exist
 
 ---
 
-### Layout Components
+### Requirement: Loading and error states on every data-fetching page
+Every page component that fetches data SHALL render three distinct states: a loading indicator WHILE the query is in-flight, a `StatusMessage` error banner IF the query fails, and the normal data view WHEN data is available.
 
-#### `AppHeader.tsx`
-Top navigation bar. Shows:
-- App name / logo
-- Active section title
-- User display name + role badge
-- Logout button
+#### Scenario: Page shows loading state
+- **GIVEN** a patient navigates to `/patient/appointments`
+- **WHEN** the React Query hook is fetching
+- **THEN** the component SHALL render a loading indicator instead of the appointments list
 
-```tsx
-interface AppHeaderProps {
-  userName: string;
-  role: string;
-  onLogout: () => void;
-}
-```
-
-#### `AppLayout.tsx`
-Page wrapper. Renders `AppHeader` + breadcrumb trail + `<Outlet />` for child routes.
-
-```tsx
-interface AppLayoutProps {
-  userName: string;
-  role: string;
-  onLogout: () => void;
-}
-```
+#### Scenario: Page shows error state
+- **GIVEN** the API call for appointments fails
+- **WHEN** React Query reports an error
+- **THEN** the component SHALL render a `StatusMessage` with `type="error"` and a user-facing message
 
 ---
 
-### Domain-Specific Components
+### Requirement: Controlled form inputs with inline validation
+All form components SHALL use controlled inputs. Validation SHALL run in the submit handler, not on `required` alone. Errors SHALL display inline next to the relevant field via `LabeledField`. The form SHALL NOT submit if validation fails.
 
-#### Appointment Components
-- **`AppointmentCard`** — shows appointment date, doctor/patient name, status badge, and action buttons (confirm / cancel)
-- **`AppointmentStatusBadge`** — colored badge for SCHEDULED / CONFIRMED / COMPLETED / CANCELLED
-- **`BookAppointmentForm`** — doctor selector, date picker, time slot selector, notes field
+#### Scenario: Login form with empty email
+- **GIVEN** the LoginPage form
+- **WHEN** the user submits without an email
+- **THEN** an inline error SHALL appear under the email field and the API SHALL NOT be called
 
-#### Availability Components
-- **`AvailabilityCalendar`** — week view showing slot status (AVAILABLE / BOOKED / BLOCKED) for a doctor
-- **`SlotStatusBadge`** — colored badge for slot status
-
-#### Patient Components
-- **`MedicalRecordCard`** — symptoms, diagnosis, lab results, appointment date
-- **`PrescriptionCard`** — medication details, pharmacy name, linked medical record
-- **`DocumentListItem`** — document name, type, upload date, download link
-
-#### Admin Components
-- **`UserRow`** — table row for user list: name, email, role, status, actions (delete / restore)
-- **`AdminMetricsPanel`** — counts for users, appointments, and appointments by status
+#### Scenario: Invalid email format
+- **GIVEN** the PatientRegistrationPage form
+- **WHEN** the user submits with `"not-an-email"` in the email field
+- **THEN** an inline validation error SHALL appear and the form SHALL NOT submit
 
 ---
 
-### Form Validation Patterns
+### Requirement: Accessibility baseline
+All form inputs SHALL have an associated `<label>` linked via `htmlFor`/`id`. All buttons SHALL have descriptive text or `aria-label`. Status badges SHALL convey state via both colour and text. All interactive elements SHALL be keyboard-navigable.
 
-All forms use controlled inputs with inline validation:
+#### Scenario: Screen reader identifies form fields
+- **GIVEN** the LoginPage form
+- **WHEN** a screen reader focuses the email input
+- **THEN** the associated label text SHALL be announced
 
-```tsx
-const [errors, setErrors] = useState<Record<string, string>>({});
-
-const validate = () => {
-  const newErrors: Record<string, string> = {};
-  if (!email) newErrors.email = "Email is required";
-  if (!isValidEmail(email)) newErrors.email = "Invalid email format";
-  if (password.length < 8) newErrors.password = "Password must be at least 8 characters";
-  setErrors(newErrors);
-  return Object.keys(newErrors).length === 0;
-};
-```
-
-Never rely on `required` attribute alone — always validate in the submit handler.
+#### Scenario: Status badge readable without colour
+- **GIVEN** an AppointmentStatusBadge showing "CONFIRMED"
+- **WHEN** the badge is inspected
+- **THEN** it SHALL display both the status text and a colour indicator
 
 ---
 
-### Loading and Error States
+### Requirement: AppLayout wraps all authenticated pages
+All authenticated routes SHALL render inside `AppLayout`. `AppLayout` SHALL render `AppHeader` (user name, role badge, logout button) and a breadcrumb trail above the page content.
 
-Every data-fetching page must handle three states:
+#### Scenario: Authenticated page has header and breadcrumbs
+- **GIVEN** an authenticated PATIENT at `/patient/appointments`
+- **WHEN** the page renders
+- **THEN** `AppHeader` SHALL be visible with the user's name, role badge, and a logout button
 
-```tsx
-if (isLoading) return <div>Loading...</div>;
-if (error) return <StatusMessage type="error" message="Failed to load data. Please try again." />;
-// data is available — render normally
-```
-
----
-
-### Accessibility Baseline
-
-- All form inputs have an associated `<label>` via `htmlFor` / `id` pairing.
-- Buttons have descriptive text or `aria-label`.
-- Color alone is never the only way to convey state (status badges also have text).
-- Keyboard navigation works for all interactive elements.
+#### Scenario: Logout clears session
+- **GIVEN** an authenticated user inside AppLayout
+- **WHEN** the user clicks Logout
+- **THEN** auth state SHALL be cleared from React Context and the user SHALL be redirected to `/`
 
 ---
 
-### No External Icon Libraries
+### Requirement: AppointmentStatusBadge uses text and colour
+`AppointmentStatusBadge` SHALL render a visually distinct badge for SCHEDULED, CONFIRMED, COMPLETED, and CANCELLED statuses. Each badge SHALL display both the status name as text and a distinct colour.
 
-Do not use `lucide-react`, `react-icons`, or any other icon package. Use:
-- Unicode symbols (✓, ✕, +, →, ...)
-- Short text labels ("Edit", "Delete", "View")
-- CSS-styled indicators (colored dots for status)
-
-This avoids build errors and keeps the bundle small.
-
----
-
-### Deliverables
-
-- `frontend/src/components/common/` — LabeledField, StatusMessage, ProtectedRoute
-- `frontend/src/components/layout/` — AppHeader, AppLayout
-- `frontend/src/components/pages/` — all 15 page components (see routing spec)
-- `frontend/src/utils/index.ts` — `isValidEmail()`, `formatDate()`, `formatDateTime()`
-- `frontend/src/constants/index.ts` — countries list, API timeout values
-
-### Acceptance Criteria
-
-- All page components render without runtime errors.
-- Forms show inline validation errors on submit with missing or invalid fields.
-- Every page handles the loading and error states from React Query.
-- No import from `lucide-react` or any icon package.
-- `npx tsc --noEmit` passes with no errors.
+#### Scenario: Distinct badge for each status
+- **GIVEN** appointments with four different statuses
+- **WHEN** each badge renders
+- **THEN** each SHALL be visually distinguishable by both colour AND displayed text label

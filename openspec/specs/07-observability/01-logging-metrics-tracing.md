@@ -1,287 +1,104 @@
-# Prompt: Observability — Logging, Metrics, and Tracing
+## ADDED Requirements
 
-## Prompt
+### Requirement: Structured JSON logging on every request
+Every HTTP request SHALL produce a structured JSON log entry containing exactly: `timestamp` (ISO 8601), `level`, `request_id` (UUID), `tenant_id` (UUID, or null for public paths), `path`, `method`, `status_code`, and `duration_ms`. No other fields SHALL be included in the access log entry.
 
-Implement observability foundations for this Healthcare SaaS application running on AWS Lambda + API Gateway. Covers structured logging, CloudWatch metrics and alarms, SLO targets, and request tracing.
+#### Scenario: Request produces structured log
+- **GIVEN** a successful `POST /api/appointments` request
+- **WHEN** the request completes
+- **THEN** a JSON log entry SHALL be emitted with all eight required fields and SHALL NOT include the request body, JWT token, or any PHI
 
----
-
-### Structured Logging
-
-#### Log Format (JSON)
-
-Every request log entry must include:
-
-```json
-{
-  "timestamp": "2025-01-01T00:00:00Z",
-  "level": "INFO",
-  "request_id": "uuid",
-  "tenant_id": "uuid",
-  "path": "/api/appointments",
-  "method": "POST",
-  "status_code": 200,
-  "duration_ms": 45
-}
-```
-
-PHI must **never** appear in logs:
-- No patient names, dates of birth, addresses
-- No medical diagnoses, symptoms, or lab results
-- No passwords, password hashes, or JWT tokens
-- No insurance policy numbers
-
-The `tenant_id` UUID is acceptable (it is an opaque identifier, not PHI).
-
-#### Log Levels by Environment
-
-| Environment | Level | Notes |
-|-------------|-------|-------|
-| Production | `INFO` | Request summaries, errors — no debug noise |
-| Staging | `INFO` | Same as production |
-| Development | `DEBUG` | Full request/response detail allowed |
-
-Gate debug logs:
-```python
-if settings.app_env == "dev":
-    logger.debug("[request body]", extra={"body": body})
-```
-
-#### CloudWatch Log Groups
-
-Lambda writes to `/aws/lambda/<function-name>` automatically.
-
-Set retention policy on the log group:
-```yaml
-# In SAM template or separate CloudFormation resource
-LogGroup:
-  Type: AWS::Logs::LogGroup
-  Properties:
-    LogGroupName: !Sub "/aws/lambda/${BackendFunction}"
-    RetentionInDays: 30
-```
+#### Scenario: Public path log omits tenant_id
+- **GIVEN** a request to `GET /api/health` with no authentication
+- **WHEN** the access log is written
+- **THEN** the `tenant_id` field SHALL be `null` and all other required fields SHALL be present
 
 ---
 
-### Request Logging Middleware
+### Requirement: PHI must never appear in any log entry
+The logging system SHALL never emit passwords, password hashes, JWT tokens, JWT signing secrets, patient names, dates of birth, addresses, medical diagnoses, symptoms, lab results, or insurance policy numbers in any log entry at any log level.
 
-Implement in `backend/app/middleware/` as a FastAPI middleware:
-
-```python
-import time
-import uuid
-import logging
-import json
-
-logger = logging.getLogger("healthcare.access")
-
-class RequestLoggingMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        request_id = str(uuid.uuid4())
-        start = time.monotonic()
-
-        response = await call_next(request)
-
-        duration_ms = int((time.monotonic() - start) * 1000)
-        tenant_id = getattr(request.state, "tenant_id", None)
-
-        logger.info(json.dumps({
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-            "level": "INFO",
-            "request_id": request_id,
-            "tenant_id": str(tenant_id) if tenant_id else None,
-            "path": request.url.path,
-            "method": request.method,
-            "status_code": response.status_code,
-            "duration_ms": duration_ms,
-        }))
-
-        response.headers["X-Request-ID"] = request_id
-        return response
-```
+#### Scenario: Exception log contains no credentials
+- **GIVEN** an unhandled exception during a request
+- **WHEN** the exception is logged with a stack trace
+- **THEN** the log entry SHALL contain the exception type and message but SHALL NOT contain the `Authorization` header value, JWT token, or any password value
 
 ---
 
-### Metrics Scope
+### Requirement: Log level controlled by environment
+Production and staging SHALL use log level `INFO`. Local development SHALL use `DEBUG`. Debug-level log entries SHALL NOT be emitted in production or staging environments.
 
-#### Lambda / API Layer
+#### Scenario: Debug logs suppressed in production
+- **GIVEN** `APP_ENV=production`
+- **WHEN** any request is processed
+- **THEN** no `DEBUG` level log entries SHALL appear in CloudWatch Logs
 
-- Invocation count (requests per minute/hour)
-- Duration p50, p95, p99 — target p95 < 500ms for common endpoints
-- Error count and error rate (Lambda errors + API Gateway 4xx/5xx)
-- Throttle count (Lambda concurrency limit hits)
-- Cold starts — logged by Lambda as `Init Duration` in CloudWatch Logs
-- Concurrent executions
-
-#### Database (RDS PostgreSQL)
-
-- Active connections — Lambda pool: `pool_size=1` per execution environment
-- Query latency — tracked via structured log timing
-- DB connection errors — logged in FastAPI exception handlers
-- RDS `DatabaseConnections` CloudWatch metric
-
-#### Business / Product
-
-- Login success rate (200 vs. 401 on `POST /api/auth/login`)
-- Appointment booking success/failure rate
-- Patient document upload success/failure rate
-- Failed auth attempts per tenant (security signal)
+#### Scenario: Debug logs available in development
+- **GIVEN** `APP_ENV=dev`
+- **WHEN** a request is processed
+- **THEN** `DEBUG` level entries MAY be emitted to help diagnose issues locally
 
 ---
 
-### CloudWatch Metrics Sources
+### Requirement: CloudWatch log group has 30-day retention
+The Lambda log group (`/aws/lambda/<function-name>`) SHALL have a retention policy of 30 days. This SHALL be declared in the SAM template or a companion CloudFormation resource.
 
-| Signal | Source | Namespace |
-|--------|--------|-----------|
-| Lambda invocations, errors, duration | Automatic | `AWS/Lambda` |
-| API Gateway 4xx/5xx, latency | Automatic | `AWS/ApiGateway` |
-| RDS connections, CPU, storage | Automatic | `AWS/RDS` |
-| Application-level metrics | Structured log parsing (CloudWatch Logs Insights) | Custom |
-
----
-
-### SLO/SLI Targets
-
-| Signal | SLI | SLO Target |
-|--------|-----|-----------|
-| API availability | successful requests / total requests | ≥ 99.5% per day |
-| API latency (p95) | p95 of Lambda Duration | < 500ms |
-| Login success rate | 200 responses / total login attempts | ≥ 95% |
-| DB connection errors | error count per hour | = 0 (alert on first occurrence) |
-| Lambda error rate | error invocations / total invocations | < 1% |
+#### Scenario: Log retention policy set
+- **GIVEN** the Lambda function is deployed
+- **WHEN** the CloudWatch log group is inspected
+- **THEN** the retention period SHALL be 30 days and logs older than 30 days SHALL be automatically deleted
 
 ---
 
-### CloudWatch Alarms
+### Requirement: CloudWatch alarms defined for critical failure modes
+The system SHALL define CloudWatch alarms for: Lambda error rate > 1% over 5 minutes, Lambda p95 duration > 3000ms over 5 minutes, API Gateway 5XX count > 10 over 5 minutes, Lambda throttle count > 0 over 1 minute, and RDS `DatabaseConnections` exceeding 80% of max connections. All alarms SHALL be wired to an SNS topic.
 
-Define in `backend/template.yaml` (SAM) or a separate `deployment/monitoring/alarms.yaml`:
+#### Scenario: Lambda error rate alarm fires
+- **GIVEN** Lambda errors exceed 1% of total invocations over a 5-minute window
+- **WHEN** the `LambdaErrorRateAlarm` evaluates
+- **THEN** the alarm SHALL transition to ALARM state and SHALL publish a notification to the configured SNS topic
 
-```yaml
-# Lambda error rate > 1% over 5 minutes
-LambdaErrorRateAlarm:
-  Namespace: AWS/Lambda
-  MetricName: Errors
-  Threshold: 1%  # use math expression: errors/invocations * 100
-  Period: 300
-  EvaluationPeriods: 1
-
-# Lambda p95 duration > 3000ms (approaching 30s timeout)
-LambdaDurationAlarm:
-  Namespace: AWS/Lambda
-  MetricName: Duration
-  ExtendedStatistic: p95
-  Threshold: 3000  # milliseconds
-  Period: 300
-  EvaluationPeriods: 1
-
-# API Gateway 5xx count > 10 in 5 minutes
-ApiGateway5xxAlarm:
-  Namespace: AWS/ApiGateway
-  MetricName: 5XXError
-  Threshold: 10
-  Period: 300
-  EvaluationPeriods: 1
-
-# Lambda throttles > 0 (indicates concurrency limit hit)
-LambdaThrottleAlarm:
-  Namespace: AWS/Lambda
-  MetricName: Throttles
-  Threshold: 1
-  Period: 60
-  EvaluationPeriods: 1
-
-# RDS connections > 80% of max_connections
-RdsConnectionAlarm:
-  Namespace: AWS/RDS
-  MetricName: DatabaseConnections
-  Threshold: 80  # tune based on RDS instance max_connections
-  Period: 300
-  EvaluationPeriods: 2
-```
-
-Wire all alarms to an SNS topic. SNS delivers to email or a Slack webhook. Every alarm description must include a link to the relevant runbook in `deployment/runbooks/alerts.md`.
+#### Scenario: RDS connection alarm fires
+- **GIVEN** RDS `DatabaseConnections` exceeds the configured threshold
+- **WHEN** the `RdsConnectionAlarm` evaluates
+- **THEN** the alarm SHALL transition to ALARM state, signalling that Lambda concurrency may need to be limited
 
 ---
 
-### Useful CloudWatch Logs Insights Queries
+### Requirement: SLO targets define alarm thresholds
+The system SHALL define and document the following SLO targets: API availability ≥ 99.5% per day, API p95 latency < 500ms, login success rate ≥ 95%, DB connection errors = 0, Lambda error rate < 1%. Alarms SHALL be set at thresholds that protect these SLOs.
 
-```sql
--- Login failure rate in the last hour
-fields @timestamp, status_code, path
-| filter path = "/api/auth/login" and status_code = 401
-| stats count() as failed_logins by bin(5m)
-
--- Slow requests (> 1s) by endpoint
-fields @timestamp, path, duration_ms
-| filter duration_ms > 1000
-| stats avg(duration_ms) as avg_ms, count() as count by path
-| sort count desc
-
--- Errors per tenant
-fields @timestamp, tenant_id, status_code
-| filter status_code >= 500
-| stats count() as errors by tenant_id
-| sort errors desc
-```
+#### Scenario: Alarm threshold aligned with SLO
+- **GIVEN** the API availability SLO of 99.5%
+- **WHEN** the Lambda error rate alarm threshold is reviewed
+- **THEN** the threshold SHALL be set at a level that would trigger before the SLO is breached (e.g. error rate > 1%)
 
 ---
 
-### Request Tracing
+### Requirement: Request ID enables end-to-end trace correlation
+Every request SHALL be assigned a `request_id` UUID that is: stored in `request.state`, propagated via a `ContextVar` to service layer code, included in every log entry emitted during that request, and returned as the `X-Request-ID` response header.
 
-#### Lightweight Tracing (CloudWatch)
+#### Scenario: Single request traceable across all log entries
+- **GIVEN** a request with `request_id = "3f2a1b4c-..."`
+- **WHEN** CloudWatch Logs Insights is queried with `filter request_id = "3f2a1b4c-..."`
+- **THEN** all log entries for that request — including middleware, service, and exception entries — SHALL be returned in the query results
 
-Propagate `request_id` through the entire request lifecycle:
-- Attach to `request.state.request_id` in middleware
-- Pass to service layer via function parameters or context
-- Include in all log entries for the request
-- Return as `X-Request-ID` response header
-
-This allows tracing a single user action across all log entries using CloudWatch Logs Insights:
-```sql
-fields @timestamp, path, status_code, duration_ms
-| filter request_id = "3f2a1b4c-..."
-| sort @timestamp asc
-```
-
-#### PHI-Safe Trace Metadata
-
-Trace spans must never include:
-- Patient identifiers beyond `user_id` (opaque UUID)
-- Medical record content
-- Authentication tokens
-
-Acceptable trace fields: `request_id`, `tenant_id`, `path`, `method`, `status_code`, `duration_ms`.
+#### Scenario: X-Request-ID present in response
+- **GIVEN** any request to any endpoint
+- **WHEN** the response is received
+- **THEN** the `X-Request-ID` response header SHALL contain the UUID assigned to that request
 
 ---
 
-### Health Check as Primary Liveness Signal
+### Requirement: GET /api/health is the primary liveness signal
+`GET /api/health` returning `{"database":"connected"}` SHALL be the primary indicator of Lambda + RDS connectivity. Monitoring systems and post-deploy smoke tests SHALL use this endpoint as the first check. IF it returns `{"database":"disconnected"}` the operator SHALL check Lambda VPC config, security group rules, and RDS instance status.
 
-`GET /api/health` is the primary signal for Lambda + RDS connectivity:
+#### Scenario: Health endpoint confirms DB connectivity
+- **GIVEN** Lambda can reach RDS on port 5432
+- **WHEN** `GET /api/health` is called
+- **THEN** the response SHALL be `{"status":"healthy","database":"connected"}` with status 200
 
-```json
-{"status": "healthy", "database": "connected"}
-```
-
-If `database` is `"disconnected"`, check:
-1. Lambda VPC config (correct subnets)
-2. Lambda security group outbound rules (allow port 5432)
-3. RDS security group inbound rules (allow from Lambda SG)
-4. RDS instance status in Console
-
----
-
-### Deliverables
-
-- `backend/app/middleware/request_logging.py` — structured JSON access log middleware
-- `backend/template.yaml` — CloudWatch alarms and log group retention
-- `deployment/runbooks/alerts.md` — for each alarm: what it means, how to investigate, how to resolve
-- `deployment/monitoring/dashboard.json` — CloudWatch dashboard covering Lambda + API Gateway + RDS
-
-### Acceptance Criteria
-
-- Every request emits a structured JSON log with `request_id`, `tenant_id`, `path`, `status_code`, `duration_ms`.
-- No PHI appears in any log output.
-- CloudWatch alarms fire to SNS topic for all defined thresholds.
-- Every alarm description references a runbook.
-- CloudWatch dashboard covers Lambda invocations, duration, errors, API Gateway 4xx/5xx, RDS connections.
-- `GET /api/health` is the primary liveness check — alert directly on its failure.
+#### Scenario: Health endpoint reports disconnection
+- **GIVEN** Lambda cannot reach RDS (e.g. security group misconfiguration)
+- **WHEN** `GET /api/health` is called
+- **THEN** the response SHALL be `{"status":"unhealthy","database":"disconnected"}` with status 503

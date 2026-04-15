@@ -1,182 +1,94 @@
-# Prompt: Middleware Stack, Lambda Configuration, and Rate Limiting
+## ADDED Requirements
 
-## Prompt
+### Requirement: Middleware stack order
+The FastAPI application SHALL register middleware in the following order (outermost first): `SecurityHeadersMiddleware`, `TenantContextMiddleware`, `CORSMiddleware`. This ensures security headers are added to every response including CORS preflight responses, and tenant context is available to all downstream handlers.
 
-Implement the FastAPI application assembly, middleware stack, Lambda entry point, and resilience controls for this Healthcare SaaS backend.
-
----
-
-### Application Assembly (`backend/app/main.py`)
-
-```python
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from mangum import Mangum
-
-from app.middleware.tenant_middleware import TenantContextMiddleware
-from app.middleware.security_headers import SecurityHeadersMiddleware
-from app.api.routes import auth, doctors, patients, appointments, admin, health
-from app.core.config import settings
-
-app = FastAPI(title="Healthcare SaaS API", version="1.0.0")
-
-# Middleware order matters — outermost runs first on request, last on response
-app.add_middleware(SecurityHeadersMiddleware)
-app.add_middleware(TenantContextMiddleware)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_origins.split(","),
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Register routers — each endpoint exposed both with and without /api prefix
-for router in [auth.router, doctors.router, patients.router,
-               appointments.router, admin.router, health.router]:
-    app.include_router(router)
-    app.include_router(router, prefix="/api")
-
-# Lambda entry point — module-level so it is reused across warm invocations
-handler = Mangum(app, lifespan="off")
-```
-
-**Why `lifespan="off"`:** FastAPI `lifespan` async context managers are not guaranteed to run correctly inside Lambda because Lambda does not guarantee shutdown. Disable it; initialise any resources at module level instead.
-
-**Why CORS is in FastAPI, not API Gateway:** API Gateway must not be configured to add CORS headers. Doing so produces duplicate `Access-Control-Allow-Origin` headers which browsers reject.
+#### Scenario: Middleware executes in correct order
+- **GIVEN** a request to a protected endpoint
+- **WHEN** the request is processed
+- **THEN** CORS headers SHALL be evaluated first on the inbound path, then the JWT SHALL be validated, and security headers SHALL be appended to the outbound response
 
 ---
 
-### Application Configuration (`backend/app/core/config.py`)
+### Requirement: CORS configured in FastAPI only
+The system SHALL configure CORS exclusively via FastAPI's `CORSMiddleware`. API Gateway SHALL NOT be configured to add CORS headers. The `allow_origins` list SHALL be populated from the `CORS_ORIGINS` environment variable. In production the list SHALL contain only the CloudFront domain. In local development it SHALL also allow `http://127.0.0.1:5173` and `http://localhost:5173`.
 
-All settings read from environment variables. Fail fast on startup if required values are missing.
+#### Scenario: CORS preflight from CloudFront domain
+- **GIVEN** `CORS_ORIGINS` is set to `https://example.cloudfront.net`
+- **WHEN** a browser sends an OPTIONS preflight from `https://example.cloudfront.net`
+- **THEN** the response SHALL include `Access-Control-Allow-Origin: https://example.cloudfront.net` with status 200
 
-```python
-@dataclass(frozen=True)
-class Settings:
-    app_env: str = os.getenv("APP_ENV", "dev")
-    database_url: str = os.getenv("DATABASE_URL")           # required
-    jwt_secret: str = os.getenv("JWT_SECRET")               # required
-    jwt_algorithm: str = os.getenv("JWT_ALGORITHM", "HS256")
-    access_token_minutes: int = int(os.getenv("ACCESS_TOKEN_MINUTES", "30"))
-    cors_origins: str = os.getenv("CORS_ORIGINS", "http://localhost:5173")
-    db_schema_init_on_startup: bool = _env_flag("DB_SCHEMA_INIT_ON_STARTUP")
-    # HOST/PORT used by Uvicorn in local dev only — ignored by Lambda
-    host: str = os.getenv("HOST", "0.0.0.0")
-    port: int = int(os.getenv("PORT", "8000"))
-    # S3 bucket for patient document uploads
-    s3_bucket_name: str = os.getenv("S3_BUCKET_NAME", "")
+#### Scenario: CORS rejected from unknown origin
+- **GIVEN** `CORS_ORIGINS` does not include `https://attacker.com`
+- **WHEN** a request arrives with `Origin: https://attacker.com`
+- **THEN** the response SHALL NOT include `Access-Control-Allow-Origin` for that origin
 
-settings = Settings()
-```
-
-**Environment variable reference:**
-
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `DATABASE_URL` | Yes | — | `postgresql+asyncpg://user:pass@host:5432/db` |
-| `JWT_SECRET` | Yes | — | HS256 signing key (≥ 32 chars) |
-| `JWT_ALGORITHM` | No | `HS256` | Token algorithm |
-| `ACCESS_TOKEN_MINUTES` | No | `30` | Token TTL in minutes |
-| `CORS_ORIGINS` | Yes | — | Comma-separated allowed origins |
-| `DB_SCHEMA_INIT_ON_STARTUP` | No | `false` | `true` for local dev only |
-| `S3_BUCKET_NAME` | Yes (Lambda) | `""` | Patient document bucket |
-| `APP_ENV` | No | `dev` | `dev` \| `staging` \| `production` |
-| `HOST` | No | `0.0.0.0` | Uvicorn bind host (local dev only) |
-| `PORT` | No | `8000` | Uvicorn bind port (local dev only) |
+#### Scenario: No duplicate CORS headers
+- **GIVEN** CORS is configured only in FastAPI and not at API Gateway
+- **WHEN** a CORS-enabled request passes through CloudFront and API Gateway to Lambda
+- **THEN** each CORS header SHALL appear exactly once in the response — not duplicated
 
 ---
 
-### Request Context Propagation
+### Requirement: Lambda entry point via Mangum
+The module `backend/app/main.py` SHALL define a module-level `handler = Mangum(app, lifespan="off")`. The `handler` object SHALL be the Lambda entry point declared in the SAM template as `Handler: app.main.handler`. The `lifespan="off"` parameter SHALL disable FastAPI lifespan context managers because Lambda does not guarantee shutdown events.
 
-Every request gets a unique `request_id` for log correlation. This is set by `TenantContextMiddleware` and accessible throughout the request lifecycle via `contextvars`.
+#### Scenario: Lambda cold start
+- **GIVEN** a new Lambda execution environment
+- **WHEN** the module is imported by the Lambda runtime
+- **THEN** `handler` SHALL be a valid callable Mangum adapter wrapping the FastAPI `app`
 
-```python
-# Set on every request (including public paths)
-import uuid
-from contextvars import ContextVar
-
-_request_id: ContextVar[str] = ContextVar("request_id", default="")
-_tenant_id: ContextVar[str] = ContextVar("tenant_id", default="")
-
-def get_request_id() -> str: return _request_id.get()
-def get_tenant_id() -> str: return _tenant_id.get()
-```
+#### Scenario: Warm invocation reuses handler
+- **GIVEN** a Lambda execution environment that has already handled at least one request
+- **WHEN** a subsequent request arrives
+- **THEN** the same `handler`, `app`, and database `engine` module-level objects SHALL be reused without re-initialisation
 
 ---
 
-### Rate Limiting
+### Requirement: Settings loaded from environment variables
+All application settings SHALL be read from environment variables via a frozen `Settings` dataclass. The application SHALL fail fast on startup if `DATABASE_URL` or `JWT_SECRET` are absent or empty.
 
-Protect sensitive endpoints from brute-force and abuse using an in-process token bucket. For Lambda, use a simple per-invocation counter backed by a shared cache (ElastiCache/Redis) or a lightweight in-memory approach for low-traffic deployments.
+#### Scenario: Required variable missing
+- **GIVEN** `DATABASE_URL` is not set in the environment
+- **WHEN** the application starts
+- **THEN** startup SHALL raise a configuration error before accepting any requests
 
-**Limits by endpoint:**
-
-| Endpoint category | Limit |
-|-------------------|-------|
-| `POST /auth/login` | 10 requests / minute per IP |
-| `POST /auth/forgot-password` | 5 requests / minute per IP |
-| `POST /auth/reset-password` | 5 requests / minute per IP |
-| All other endpoints | 100 requests / minute per token |
-
-**Rate limit response:**
-```json
-HTTP 429 Too Many Requests
-Retry-After: 60
-{"detail": "Too many requests. Please retry after 60 seconds."}
-```
-
-**Implementation note for Lambda:** In-memory rate limiting per execution environment is not effective at scale (each Lambda container is independent). For production, use AWS WAF rate limiting rules on the API Gateway or CloudFront distribution — this is cheaper and more reliable than in-process solutions.
+#### Scenario: All settings accessible via singleton
+- **GIVEN** the `settings` module-level singleton is instantiated
+- **WHEN** any module imports `from app.core.config import settings`
+- **THEN** `settings.database_url`, `settings.jwt_secret`, `settings.cors_origins`, and all other defined fields SHALL be accessible without additional calls
 
 ---
 
-### Centralized Exception Handling
+### Requirement: Request ID propagated through request lifecycle
+Every request SHALL be assigned a unique `request_id` UUID by the middleware. The `request_id` SHALL be stored in `request.state` and in a `ContextVar` so it is accessible in service layer code. The `request_id` SHALL be included in every structured log entry and returned in the `X-Request-ID` response header.
 
-Register an exception handler that catches unhandled exceptions and returns a safe response:
+#### Scenario: Request ID in log output
+- **GIVEN** a request processed by the application
+- **WHEN** any logger emits a message during that request
+- **THEN** the log entry SHALL include the `request_id` assigned to that request
 
-```python
-@app.exception_handler(Exception)
-async def unhandled_exception_handler(request: Request, exc: Exception):
-    logger.error(f"Unhandled exception: {exc}", exc_info=True)
-    return JSONResponse(
-        status_code=500,
-        content={"detail": "An internal error occurred. Please try again."}
-    )
-```
-
-Never expose stack traces or internal error details to clients.
+#### Scenario: Request ID in response header
+- **GIVEN** any request to any endpoint
+- **WHEN** the response is returned
+- **THEN** the response SHALL include an `X-Request-ID` header containing the UUID assigned to that request
 
 ---
 
-### Deployment Context: Lambda + Mangum
+### Requirement: Rate limiting on auth endpoints
+The system SHALL enforce rate limits on sensitive endpoints: `POST /auth/login` at 10 requests per minute per IP, `POST /auth/forgot-password` at 5 requests per minute per IP, `POST /auth/reset-password` at 5 requests per minute per IP. WHEN a rate limit is exceeded the system SHALL return `429 Too Many Requests` with a `Retry-After: 60` header. For production scale, rate limiting SHOULD be implemented at AWS WAF on CloudFront or API Gateway rather than in-process.
 
-The `handler = Mangum(app, lifespan="off")` at the bottom of `main.py` is the Lambda entry point. API Gateway invokes it as:
-
-```json
-{
-  "FunctionName": "healthcare-backend-backend",
-  "Handler": "app.main.handler"
-}
-```
-
-The Lambda execution environment is re-used across warm invocations. Module-level objects (the `engine`, boto3 clients, the `app` instance) are created once per environment.
-
-**Cold start behaviour:** First invocation after a new environment is provisioned takes ~1–2 seconds. Subsequent warm invocations are fast. `pool_pre_ping=True` on the DB engine detects stale connections after long idle periods.
+#### Scenario: Login rate limit exceeded
+- **GIVEN** 10 failed login attempts from the same IP within one minute
+- **WHEN** an 11th request arrives from that IP
+- **THEN** the system SHALL return `429 {"detail": "Too many requests. Please retry after 60 seconds."}` with `Retry-After: 60`
 
 ---
 
-### Deliverables
+### Requirement: Unhandled exceptions return safe 500 response
+The application SHALL register a global exception handler that catches all unhandled exceptions. The handler SHALL log the exception with a stack trace for internal diagnostics and SHALL return `500 {"detail": "An internal error occurred. Please try again."}` to the client. Stack traces and internal error details SHALL NOT be exposed in the API response.
 
-- `backend/app/main.py` — full app factory with middleware stack and `handler = Mangum(...)`
-- `backend/app/core/config.py` — `Settings` dataclass reading from env
-- `backend/app/middleware/tenant_middleware.py` — JWT extraction, public path bypass
-- `backend/app/middleware/security_headers.py` — security response headers
-- `backend/.env.example` — all env vars with documentation comments
-
-### Acceptance Criteria
-
-- `from app.main import handler` succeeds without errors.
-- `GET /api/health` returns 200 with `{"status":"healthy"}`.
-- A request missing the `Authorization` header to a protected path returns 401.
-- A request to a public path (e.g. `POST /api/auth/login`) returns the correct response without a token.
-- Security headers are present on every response.
-- CORS preflight (`OPTIONS`) on `/api/auth/login` returns the correct `Access-Control-Allow-Origin`.
+#### Scenario: Unexpected exception in route handler
+- **GIVEN** a route handler that raises an unexpected RuntimeError
+- **WHEN** the exception propagates to the global handler
+- **THEN** the client SHALL receive `500 {"detail": "An internal error occurred. Please try again."}` and the internal stack trace SHALL appear only in CloudWatch logs, not in the response body

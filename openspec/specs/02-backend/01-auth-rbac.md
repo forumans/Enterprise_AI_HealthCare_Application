@@ -1,204 +1,129 @@
-# Prompt: Authentication and Role-Based Access Control
+## ADDED Requirements
 
-## Prompt
+### Requirement: JWT HS256 token structure
+The system SHALL issue stateless JWT tokens signed with HS256 using the `JWT_SECRET` environment variable. Each token SHALL contain claims: `user_id` (UUID string), `tenant_id` (UUID string), `role` (one of `ADMIN`, `DOCTOR`, `PATIENT`), `iat` (issued-at), and `exp` (expiry). The default TTL SHALL be 30 minutes, configurable via `ACCESS_TOKEN_MINUTES`.
 
-Implement authentication and authorization for a stateless, multi-tenant Healthcare SaaS backend. The backend runs on AWS Lambda — no sessions, no cookies, all state in the JWT.
+#### Scenario: Successful login token issuance
+- **GIVEN** a valid user with correct credentials
+- **WHEN** `POST /auth/login` is called with the correct email and password
+- **THEN** the system SHALL return a JWT containing `user_id`, `tenant_id`, `role`, `iat`, and `exp` claims, signed with HS256
 
----
-
-### JWT Token Design
-
-**Algorithm:** HS256 (HMAC-SHA256), secret from `JWT_SECRET` env var.
-
-**Payload claims:**
-
-| Claim | Type | Description |
-|-------|------|-------------|
-| `user_id` | UUID string | Authenticated user's ID |
-| `tenant_id` | UUID string | Tenant the user belongs to |
-| `role` | string | `ADMIN`, `DOCTOR`, or `PATIENT` |
-| `iat` | int | Issued-at (seconds since epoch) |
-| `exp` | int | Expiry (seconds since epoch) |
-
-**Default TTL:** 30 minutes (configurable via `ACCESS_TOKEN_MINUTES` env var).
-
-```python
-# backend/app/core/security.py
-def create_access_token(user_id: str, tenant_id: str, role: str, expires_minutes: int = 30) -> str:
-    payload = {
-        "user_id": str(user_id),
-        "tenant_id": str(tenant_id),
-        "role": role,
-        "iat": datetime.utcnow(),
-        "exp": datetime.utcnow() + timedelta(minutes=expires_minutes),
-    }
-    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
-```
+#### Scenario: Expired token rejected
+- **GIVEN** a JWT whose `exp` timestamp is in the past
+- **WHEN** a request is made to any protected endpoint with this token
+- **THEN** the system SHALL return `401 Unauthorized` and SHALL NOT process the request
 
 ---
 
-### Password Hashing
+### Requirement: PBKDF2 password hashing
+The system SHALL hash passwords using PBKDF2-HMAC-SHA256 with 120,000 iterations and a 16-byte cryptographically random salt per password. The stored format SHALL be `pbkdf2$<salt_hex>$<digest_hex>`. Passwords SHALL never be stored in plaintext and SHALL never appear in logs or API responses.
 
-Use **PBKDF2-HMAC-SHA256** with 120,000 iterations and a 16-byte random salt per password. This is the Python standard library `hashlib.pbkdf2_hmac` — no extra dependencies.
+#### Scenario: Password stored hashed
+- **GIVEN** a user registering with a plaintext password
+- **WHEN** the registration is processed
+- **THEN** the `password_hash` column SHALL contain a PBKDF2 hash in `pbkdf2$<salt_hex>$<digest_hex>` format and SHALL NOT contain the original plaintext
 
-```python
-# Output format: "pbkdf2$<salt_hex>$<digest_hex>"
-
-def hash_password(password: str) -> str: ...
-def verify_password(plain: str, hashed: str) -> bool: ...
-```
-
-Maintain backward compatibility with bcrypt hashes (for accounts migrated from earlier versions) by detecting the hash prefix.
-
----
-
-### TenantContextMiddleware
-
-File: `backend/app/middleware/tenant_middleware.py`
-
-Runs on every request. For protected paths:
-
-1. Read `Authorization: Bearer <token>` header.
-2. Decode and verify JWT signature against `JWT_SECRET`.
-3. Check token has not expired.
-4. Validate `tenant_id` and `user_id` are valid UUIDs.
-5. Validate `role` is one of `ADMIN`, `DOCTOR`, `PATIENT`.
-6. Store identity in `request.state` and Python `contextvars`.
-7. Return `401 Unauthorized` if any step fails.
-
-**Public paths that bypass the middleware entirely:**
-
-```python
-PUBLIC_PATHS = {
-    "/health", "/api/health", "/api/health/ready", "/api/health/live",
-    "/auth/login", "/api/auth/login",
-    "/auth/register", "/api/auth/register",
-    "/auth/forgot-password", "/api/auth/forgot-password",
-    "/auth/reset-password", "/api/auth/reset-password",
-    "/doctors", "/api/doctors",
-    "/doctors/register", "/api/doctors/register",
-    "/admin/register", "/api/admin/register",
-}
-# Also bypass: /doctor/availability/{id}/ndays and /api/doctor/availability/{id}/ndays
-```
+#### Scenario: Password verification
+- **GIVEN** a stored PBKDF2 hash
+- **WHEN** `verify_password(plain, hashed)` is called with the correct plaintext
+- **THEN** the function SHALL return `True`; with any other input it SHALL return `False`
 
 ---
 
-### Identity and Role Dependencies
+### Requirement: TenantContextMiddleware on every protected request
+The system SHALL run `TenantContextMiddleware` on every request. For protected paths, the middleware SHALL: (1) extract the `Authorization: Bearer <token>` header, (2) verify the JWT signature against `JWT_SECRET`, (3) confirm the token has not expired, (4) validate that `tenant_id` and `user_id` are valid UUIDs and `role` is a known value, (5) store the identity in `request.state` and `contextvars`. IF any validation step fails the middleware SHALL return `401 Unauthorized` and SHALL NOT call the downstream handler.
 
-File: `backend/app/core/dependencies.py`
+#### Scenario: Valid token on protected path
+- **GIVEN** a request to a protected endpoint with a valid, unexpired JWT
+- **WHEN** `TenantContextMiddleware` processes the request
+- **THEN** the identity SHALL be stored in `request.state` and the request SHALL proceed to the route handler
 
-```python
-@dataclass
-class CurrentIdentity:
-    user_id: uuid.UUID
-    tenant_id: uuid.UUID
-    role: str
+#### Scenario: Missing Authorization header
+- **GIVEN** a request to a protected endpoint with no `Authorization` header
+- **WHEN** the middleware processes the request
+- **THEN** the system SHALL return `401 Unauthorized` and SHALL NOT invoke the route handler
 
-def get_current_identity(request: Request) -> CurrentIdentity:
-    """Extract identity set by TenantContextMiddleware."""
-    ...
-
-def require_roles(*roles: str):
-    """Return a dependency that checks the authenticated role."""
-    def dependency(identity: CurrentIdentity = Depends(get_current_identity)) -> CurrentIdentity:
-        if identity.role not in roles:
-            raise HTTPException(status_code=403, detail="Insufficient permissions")
-        return identity
-    return dependency
-```
-
-Usage in routes:
-```python
-@router.get("/admin/users")
-async def list_users(identity: CurrentIdentity = Depends(require_roles("ADMIN"))):
-    ...
-
-@router.post("/medical-records")
-async def create_record(identity: CurrentIdentity = Depends(require_roles("DOCTOR", "ADMIN"))):
-    ...
-```
+#### Scenario: Tampered token signature
+- **GIVEN** a JWT with a modified payload but the original signature
+- **WHEN** the middleware verifies the signature
+- **THEN** the system SHALL return `401 Unauthorized`
 
 ---
 
-### Auth API Routes
+### Requirement: Public path bypass
+The middleware SHALL bypass JWT validation for the following paths: `/health`, `/api/health`, `/auth/login`, `/api/auth/login`, `/auth/register`, `/api/auth/register`, `/auth/forgot-password`, `/api/auth/forgot-password`, `/auth/reset-password`, `/api/auth/reset-password`, `/doctors`, `/api/doctors`, `/doctors/register`, `/api/doctors/register`, `/admin/register`, `/api/admin/register`, and `/doctor/availability/{id}/ndays` (and `/api/` prefixed equivalents).
 
-File: `backend/app/api/routes/auth.py`
+#### Scenario: Login endpoint accessible without token
+- **GIVEN** no Authorization header is present
+- **WHEN** `POST /api/auth/login` is called
+- **THEN** the middleware SHALL NOT reject the request and the login handler SHALL execute normally
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `POST` | `/auth/register` | Public | Register a new PATIENT account |
-| `POST` | `/auth/login` | Public | Login, returns `{access_token, role, tenant_id, user_name}` |
-| `POST` | `/auth/forgot-password` | Public | Send password reset email |
-| `POST` | `/auth/reset-password` | Public | Apply new password using reset token |
-
-**Login response:**
-```json
-{
-  "access_token": "eyJ...",
-  "token_type": "bearer",
-  "role": "PATIENT",
-  "tenant_id": "uuid",
-  "user_name": "John Doe",
-  "user_id": "uuid"
-}
-```
-
-**Error responses:**
-- `401 {"detail": "Invalid credentials"}` — wrong email or password (never distinguish which)
-- `403 {"detail": "Account inactive"}` — `is_active=false` or soft-deleted user
-- `422` — validation error (missing fields, invalid format)
+#### Scenario: Public doctor list accessible without token
+- **GIVEN** no Authorization header is present
+- **WHEN** `GET /api/doctors` is called
+- **THEN** the system SHALL return the list of active doctors without requiring authentication
 
 ---
 
-### RBAC Permission Summary
+### Requirement: Role-based access control via require_roles()
+The system SHALL provide a `require_roles(*roles)` FastAPI dependency factory. WHEN the authenticated user's role is not in the allowed list the dependency SHALL raise `HTTPException(403, "Insufficient permissions")`. Every protected route SHALL declare its allowed roles explicitly via `Depends(require_roles(...))`.
 
-| Action | PATIENT | DOCTOR | ADMIN |
-|--------|---------|--------|-------|
-| Book own appointment | ✓ | — | ✓ |
-| Cancel own appointment | ✓ | — | ✓ |
-| View own appointments | ✓ | ✓ | ✓ |
-| Manage availability | — | ✓ | ✓ |
-| Create medical records | — | ✓ | ✓ |
-| View own medical history | ✓ | — | ✓ |
-| Upload own documents | ✓ | — | ✓ |
-| View all users (tenant) | — | — | ✓ |
-| Delete / restore users | — | — | ✓ |
-| Reset any user's password | — | — | ✓ |
-| View system reports | — | — | ✓ |
+#### Scenario: Correct role allowed
+- **GIVEN** an authenticated ADMIN user
+- **WHEN** the user calls `GET /api/admin/users`
+- **THEN** the system SHALL return the user list with status 200
 
----
+#### Scenario: Wrong role rejected
+- **GIVEN** an authenticated PATIENT user
+- **WHEN** the user calls `GET /api/admin/users`
+- **THEN** the system SHALL return `403 Forbidden` with `{"detail": "Insufficient permissions"}`
 
-### Security Headers Middleware
-
-File: `backend/app/middleware/security_headers.py`
-
-Add to every response:
-
-| Header | Value |
-|--------|-------|
-| `X-Content-Type-Options` | `nosniff` |
-| `X-Frame-Options` | `DENY` |
-| `Strict-Transport-Security` | `max-age=31536000` |
-| `Cache-Control` | `no-store` |
-| `Permissions-Policy` | `geolocation=(), camera=(), microphone=(), payment=()` |
+#### Scenario: Multi-role endpoint
+- **GIVEN** an authenticated DOCTOR user
+- **WHEN** the doctor calls `PUT /api/appointments/{id}/status`
+- **THEN** the system SHALL allow the request because DOCTOR is in the allowed roles `[DOCTOR, ADMIN]`
 
 ---
 
-### Deliverables
+### Requirement: Account enumeration prevention
+The login endpoint SHALL return identical error messages and status codes for both "user not found" and "wrong password" conditions. The response SHALL always be `401 {"detail": "Invalid credentials"}` regardless of which condition caused the failure.
 
-- `backend/app/core/security.py` — `create_access_token`, `hash_password`, `verify_password`
-- `backend/app/middleware/tenant_middleware.py` — JWT extraction, validation, public path bypass
-- `backend/app/middleware/security_headers.py` — response headers
-- `backend/app/core/dependencies.py` — `CurrentIdentity`, `get_current_identity`, `require_roles()`
-- `backend/app/api/routes/auth.py` — register, login, forgot-password, reset-password
-- `backend/tests/test_auth.py` — unit tests for JWT, password hashing, and middleware
+#### Scenario: Wrong password returns generic error
+- **GIVEN** a real user account in the system
+- **WHEN** `POST /auth/login` is called with the correct email but wrong password
+- **THEN** the system SHALL return `401 {"detail": "Invalid credentials"}`
 
-### Acceptance Criteria
+#### Scenario: Non-existent user returns same generic error
+- **GIVEN** an email address that does not exist in the tenant
+- **WHEN** `POST /auth/login` is called with that email
+- **THEN** the system SHALL return `401 {"detail": "Invalid credentials"}` — identical to the wrong-password response
 
-- `POST /auth/login` with valid credentials returns a JWT with correct claims.
-- `POST /auth/login` with wrong password returns `401`, not `403` or `422`.
-- A request with an expired token returns `401`.
-- A PATIENT token accessing `/admin/users` returns `403`.
-- Cross-tenant access: a valid token from Tenant A cannot access Tenant B data.
-- All auth failure responses use safe, generic messages — no account enumeration.
+---
+
+### Requirement: Security response headers on every response
+The system SHALL add the following headers to every HTTP response via `SecurityHeadersMiddleware`: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Strict-Transport-Security: max-age=31536000`, `Cache-Control: no-store`, `Permissions-Policy: geolocation=(), camera=(), microphone=(), payment=()`.
+
+#### Scenario: Security headers present on protected endpoint
+- **GIVEN** an authenticated request to any API endpoint
+- **WHEN** the response is returned
+- **THEN** all five security headers SHALL be present with the specified values
+
+#### Scenario: Security headers present on public endpoint
+- **GIVEN** an unauthenticated request to `GET /api/health`
+- **WHEN** the response is returned
+- **THEN** all five security headers SHALL be present
+
+---
+
+### Requirement: Auth API endpoints
+The system SHALL expose four auth endpoints: `POST /auth/register` (public, registers a PATIENT), `POST /auth/login` (public, returns access token), `POST /auth/forgot-password` (public, always returns the same generic message), `POST /auth/reset-password` (public, applies a new password using a reset token). All four endpoints SHALL be accessible with and without the `/api` prefix.
+
+#### Scenario: Successful registration
+- **GIVEN** a valid email, password meeting complexity requirements, and full_name
+- **WHEN** `POST /auth/register` is called
+- **THEN** the system SHALL create a new user with role PATIENT and return `{user_id, email, role, tenant_id}` with status 201
+
+#### Scenario: Forgot-password always returns same response
+- **GIVEN** any email address, whether it exists in the system or not
+- **WHEN** `POST /auth/forgot-password` is called
+- **THEN** the system SHALL return `{"message": "If account exists, reset link sent"}` with status 200, regardless of whether the email exists

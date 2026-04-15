@@ -1,182 +1,99 @@
-# Prompt: Security Controls
+## ADDED Requirements
 
-## Prompt
+### Requirement: Backend enforces RBAC and tenant ownership on every protected endpoint
+Every protected endpoint SHALL verify both (1) that the authenticated role is in the allowed set and (2) that the requested resource belongs to the authenticated user's tenant. Frontend role guards SHALL NOT be considered sufficient authorization. Enforcement SHALL occur via `require_roles()` and `tenant_id` query filtering in the service layer.
 
-Implement all security controls for this multi-tenant Healthcare SaaS platform. Security is enforced at the backend — the frontend enforces it only as a UX convenience.
+#### Scenario: PATIENT cannot access admin endpoint
+- **GIVEN** an authenticated PATIENT user
+- **WHEN** `GET /api/admin/users` is requested with the patient's token
+- **THEN** the system SHALL return `403 Forbidden` before executing any database query
 
----
+#### Scenario: DOCTOR cannot book appointment for patient
+- **GIVEN** an authenticated DOCTOR user
+- **WHEN** `POST /api/appointments` is called with the doctor's token
+- **THEN** the system SHALL return `403 Forbidden` because only PATIENT and ADMIN may book appointments
 
-### Permission Matrix
-
-Every endpoint must enforce role check AND tenant ownership. Frontend role guards are not sufficient.
-
-| Resource | Action | PATIENT | DOCTOR | ADMIN |
-|----------|--------|---------|--------|-------|
-| Own profile | Read / Write | ✓ | ✓ | ✓ |
-| Other user profiles | Read | — | — | ✓ |
-| Any user | Delete / Restore | — | — | ✓ |
-| Own appointments | Book / Cancel | ✓ | — | ✓ |
-| Own appointments | Read | ✓ | ✓ | ✓ |
-| Any appointment | Read | — | — | ✓ |
-| Appointment status | Update | — | ✓ | ✓ |
-| Doctor availability | Create / Update | — | ✓ | ✓ |
-| Doctor availability | Read | ✓ (public) | ✓ | ✓ |
-| Medical records | Create | — | ✓ | ✓ |
-| Own medical history | Read | ✓ | — | ✓ |
-| Own prescriptions | Read | ✓ | — | ✓ |
-| Prescriptions | Create | — | ✓ | ✓ |
-| Own documents | Upload / Read | ✓ | — | ✓ |
-| System reports | Read | — | — | ✓ |
-| Audit logs | Read | — | — | ✓ |
+#### Scenario: ADMIN can access all tenant resources
+- **GIVEN** an authenticated ADMIN user
+- **WHEN** `GET /api/admin/users` is requested
+- **THEN** the system SHALL return all users within the admin's tenant
 
 ---
 
-### Tenant Isolation
+### Requirement: Cross-tenant access is always blocked
+Every database query on a tenant-owned table SHALL include `WHERE tenant_id = <jwt.tenant_id>`. A valid JWT from Tenant A SHALL never return, modify, or delete data belonging to Tenant B, regardless of what IDs are passed in the request.
 
-The `tenant_id` claim in the JWT is used to scope **every** database query. A user from Tenant A can never access Tenant B data even with a valid token.
+#### Scenario: Cross-tenant patient data inaccessible
+- **GIVEN** a valid token for a user in Tenant A and the ID of a patient in Tenant B
+- **WHEN** a request is made to fetch the Tenant B patient's profile using Tenant A's token
+- **THEN** the system SHALL return 403 or 404 and SHALL NOT return any Tenant B data
 
-```python
-# Every service method must filter by tenant_id
-stmt = select(User).where(
-    User.tenant_id == identity.tenant_id,
-    User.deleted_at.is_(None),
-)
-```
-
-Write integration tests that attempt cross-tenant access and verify they return 403 or empty results.
-
----
-
-### Password Requirements
-
-- Minimum 8 characters
-- At least one uppercase, one lowercase, one digit
-- Hashed with PBKDF2-HMAC-SHA256, 120,000 iterations, 16-byte random salt
-- Never stored in plaintext; never logged; never returned in API responses
+#### Scenario: Tenant scoping on all list endpoints
+- **GIVEN** two tenants each with 10 appointments
+- **WHEN** an ADMIN from Tenant A calls `GET /api/admin/appointments`
+- **THEN** the response SHALL contain exactly 10 appointments from Tenant A and zero from Tenant B
 
 ---
 
-### Encryption
+### Requirement: Password complexity and secure hashing
+Passwords SHALL meet minimum complexity requirements: at least 8 characters, one uppercase letter, one lowercase letter, and one digit. Passwords SHALL be hashed using PBKDF2-HMAC-SHA256 with 120,000 iterations and a 16-byte random salt. Passwords SHALL never be stored in plaintext, logged, or returned in any API response.
 
-**In transit:** TLS enforced at CloudFront. All HTTP traffic is redirected to HTTPS at the CloudFront distribution level.
+#### Scenario: Weak password rejected at registration
+- **GIVEN** a user registering with password `"short"`
+- **WHEN** `POST /auth/register` is called
+- **THEN** the system SHALL return `422 Unprocessable Entity` with a validation error
 
-**At rest:**
-- RDS: enable encryption at rest (AWS KMS managed key) at instance creation.
-- S3 (documents): enable server-side encryption (`SSE-S3` or `SSE-KMS`).
-- S3 (frontend assets): no sensitive data, standard S3 defaults.
-
----
-
-### IAM Least Privilege
-
-**Lambda execution role** needs only:
-```json
-{
-  "s3:PutObject": "arn:aws:s3:::healthcare-patient-documents/*",
-  "s3:GetObject": "arn:aws:s3:::healthcare-patient-documents/*",
-  "logs:CreateLogGroup": "*",
-  "logs:CreateLogStream": "*",
-  "logs:PutLogEvents": "*",
-  "ec2:CreateNetworkInterface": "*",
-  "ec2:DescribeNetworkInterfaces": "*",
-  "ec2:DeleteNetworkInterface": "*"
-}
-```
-
-**CI/CD deploy user** needs only what SAM requires — no `AdministratorAccess`.
+#### Scenario: Password not in API response
+- **GIVEN** a user retrieves their own profile
+- **WHEN** `GET /api/patient/me` returns the profile object
+- **THEN** the `password_hash` field SHALL NOT be present in the response
 
 ---
 
-### CORS Policy
+### Requirement: PHI must never appear in logs or error messages
+The system SHALL NEVER log or emit in error messages: passwords, password hashes, JWT tokens, JWT signing secrets, patient names, dates of birth, addresses, medical diagnoses, symptoms, lab results, or insurance policy numbers. Structured log entries SHALL contain only: `timestamp`, `level`, `request_id`, `tenant_id` (UUID only), `path`, `method`, `status_code`, and `duration_ms`.
 
-CORS is handled **only** in FastAPI `CORSMiddleware`. API Gateway must **not** be configured to add CORS headers — this would cause duplicate headers that browsers reject.
+#### Scenario: Login failure log contains no PHI
+- **GIVEN** a failed login attempt for `patient@example.com`
+- **WHEN** the system logs the event
+- **THEN** the log entry SHALL contain `path: /api/auth/login` and `status_code: 401` but SHALL NOT contain the email address or any password value
 
-```python
-CORSMiddleware(
-    allow_origins=["https://your-cloudfront-domain.cloudfront.net"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-```
-
-In local development, also allow `http://127.0.0.1:5173` and `http://localhost:5173`.
+#### Scenario: Unhandled exception log contains no tokens
+- **GIVEN** an internal exception occurs during a request
+- **WHEN** the exception handler logs the error
+- **THEN** the log entry SHALL contain the stack trace but SHALL NOT include the `Authorization` header value or JWT token
 
 ---
 
-### Security Headers
+### Requirement: Input validation on all request bodies
+All request bodies SHALL be validated using Pydantic models before any business logic executes. Email fields SHALL be validated with `EmailStr` or equivalent regex. File uploads SHALL be rejected if the content type or sanitised filename indicate an unsupported or dangerous type.
 
-Add to every response (see `SecurityHeadersMiddleware`):
+#### Scenario: SQL injection in login email rejected
+- **GIVEN** a login attempt with email `"' OR 1=1 --"`
+- **WHEN** `POST /auth/login` is called
+- **THEN** the system SHALL return `401` or `422` and SHALL NOT execute any raw SQL with that input
 
-| Header | Value | Purpose |
-|--------|-------|---------|
-| `X-Content-Type-Options` | `nosniff` | Prevent MIME sniffing |
-| `X-Frame-Options` | `DENY` | Prevent clickjacking |
-| `Strict-Transport-Security` | `max-age=31536000` | Force HTTPS |
-| `Cache-Control` | `no-store` | Prevent API response caching |
-| `Permissions-Policy` | `geolocation=(), camera=(), microphone=(), payment=()` | Restrict browser features |
-
----
-
-### PHI Safety Rules
-
-These must never appear in logs, error messages, or API responses:
-- Passwords or password hashes
-- JWT tokens or signing secrets
-- Patient names, dates of birth, addresses
-- Medical diagnoses, symptoms, or lab results (except in authorized data responses)
-- Insurance policy numbers
-
-Log format:
-```json
-{
-  "timestamp": "2025-01-01T00:00:00Z",
-  "level": "INFO",
-  "request_id": "uuid",
-  "tenant_id": "uuid",    ← tenant UUID is OK (not PHI)
-  "path": "/api/appointments",
-  "status_code": 200,
-  "duration_ms": 45
-}
-```
+#### Scenario: Invalid email format rejected
+- **GIVEN** a registration request with `email: "not-valid"`
+- **WHEN** Pydantic validates the request body
+- **THEN** the system SHALL return `422 Unprocessable Entity` before any database operation
 
 ---
 
-### Input Validation
+### Requirement: Encryption in transit and at rest
+All traffic SHALL be served over HTTPS enforced at CloudFront. RDS SHALL have encryption at rest enabled using an AWS KMS managed key. The patient documents S3 bucket SHALL have server-side encryption enabled (`SSE-S3` or `SSE-KMS`).
 
-Use Pydantic models for all request bodies. Never trust client input:
-- Validate email format with regex or Pydantic's `EmailStr`
-- Sanitize filenames before using them in S3 keys (`werkzeug.utils.secure_filename` or equivalent)
-- Reject file uploads with unsupported MIME types
-- Enforce max upload size server-side (not just frontend)
-
----
-
-### Anti-Patterns to Avoid
-
-- Using `create_all` as the production schema strategy
-- Logging tokens, passwords, or PHI
-- Treating frontend role checks as sufficient authorization
-- Using broad wildcard CORS (`allow_origins=["*"]`) in production
-- Hardcoding secrets in source files or CI workflow files
-- Returning different error messages for "user not found" vs "wrong password" (enables account enumeration)
-- Writing migrations without rollback planning
+#### Scenario: HTTP request redirected to HTTPS
+- **GIVEN** a browser sends an HTTP request to the CloudFront distribution
+- **WHEN** CloudFront evaluates the request
+- **THEN** it SHALL redirect to HTTPS and SHALL NOT serve content over plain HTTP
 
 ---
 
-### Deliverables
+### Requirement: CORS restricted to known origins in production
+The `allow_origins` list in FastAPI's `CORSMiddleware` SHALL contain only the CloudFront domain in production. Wildcard `allow_origins=["*"]` SHALL NOT be used in any non-development environment.
 
-- `backend/app/middleware/security_headers.py` — response headers
-- `backend/app/middleware/tenant_middleware.py` — JWT validation and tenant enforcement
-- `backend/app/core/dependencies.py` — `require_roles()` enforcement
-- `backend/docs/security-controls.md` — permission matrix and threat model notes
-- `backend/tests/test_rbac.py` — role tests: correct role allowed, wrong role 403, cross-tenant 403/empty
-
-### Acceptance Criteria
-
-- Every protected endpoint returns 403 for the wrong role.
-- Cross-tenant access attempts return 403 or empty results — never foreign tenant data.
-- Security headers are present on every response.
-- No PHI appears in any log output.
-- Passwords are never stored in plaintext or returned in any API response.
-- S3 bucket and RDS have encryption at rest enabled.
+#### Scenario: Production CORS rejects unknown origin
+- **GIVEN** `CORS_ORIGINS` is set to the CloudFront domain only
+- **WHEN** a request arrives from an unknown origin
+- **THEN** the response SHALL NOT include `Access-Control-Allow-Origin` for that origin

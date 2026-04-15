@@ -1,0 +1,25 @@
+schema: spec-driven
+
+context: |
+  Project: Enterprise AI Healthcare SaaS Platform (multi-tenant)
+  Tech stack: FastAPI (Python 3.12) + React 18 + TypeScript + Vite
+  Backend runtime: AWS Lambda (Mangum ASGI adapter) + API Gateway HTTP API
+  IaC: AWS SAM (backend/template.yaml)
+  Frontend: S3 static site + CloudFront (proxies /api/* to API Gateway)
+  Database: RDS PostgreSQL (SQLAlchemy 2.0 async + asyncpg), no Alembic — versioned SQL migrations
+  Auth: JWT HS256, stateless; token stored in React Context only (never localStorage)
+  Multi-tenancy: tenant_id claim in JWT scopes every DB query
+  RBAC roles: PATIENT, DOCTOR, ADMIN — enforced via require_roles() dependency at backend
+  Password hashing: PBKDF2-HMAC-SHA256, 120,000 iterations, 16-byte random salt
+  Lambda DB pooling: pool_size=1, max_overflow=0 (prevents RDS connection exhaustion)
+  Document storage: S3 private bucket, presigned URLs for download
+  No external icon libraries — Unicode symbols and text labels only
+  Security headers: X-Content-Type-Options, X-Frame-Options, HSTS, Cache-Control, Permissions-Policy
+  PHI must never appear in logs, error messages, or API responses
+
+rules:
+  tasks:
+    - Break tasks into independently deployable chunks
+    - Backend tasks must include the affected file path (e.g. backend/app/api/auth.py)
+    - Frontend tasks must include the affected component path
+    - Each task should include an acceptance criterion

@@ -160,6 +160,21 @@ api.getAdminAppointments(token)             // GET /admin/appointments
 api.getAdminReports(token)                  // GET /admin/reports
 ```
 
+### Datetime Handling
+
+All slot times sent to the API must be **UTC ISO strings**. Use `new Date(...).toISOString()` — never manually construct a naive local-time string — so the backend always receives an unambiguous UTC timestamp.
+
+Slot times returned from the API are UTC-naive strings (no `Z` suffix). Append `Z` before passing to `new Date()` so the browser converts to the user's local time correctly:
+
+```typescript
+// Correct — treats stored time as UTC, converts to local for display
+const slotTime = new Date(apiSlotString + 'Z');
+slotTime.getHours(); // local hour
+
+// Wrong — treats stored UTC time as local time, off by the UTC offset
+const slotTime = new Date(apiSlotString);
+```
+
 ---
 
 ## Authentication Flow

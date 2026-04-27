@@ -227,3 +227,8 @@ Check `VITE_API_BASE_URL` in `.env.local` matches the port Uvicorn is listening 
 
 ### `S3_BUCKET_NAME` not set warning
 Document uploads will fail locally unless you set a real S3 bucket name and have AWS credentials configured. For local testing without S3, skip document upload tests.
+
+### Something works locally but fails on AWS with a time-related error
+Lambda's system clock runs in UTC. Any code that calls `datetime.now()` without a timezone returns your machine's local time locally but UTC on Lambda. If a time comparison behaves differently between environments, check that the code uses `datetime.now(timezone.utc)` rather than bare `datetime.now()`.
+
+See the [Datetime and Timezone Convention](architecture.md#datetime-and-timezone-convention) section in the architecture guide for the full set of rules.

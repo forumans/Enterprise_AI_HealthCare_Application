@@ -163,6 +163,26 @@ Every database table (except `tenants`) has a `tenant_id` column. All queries ar
 
 ---
 
+## Datetime and Timezone Convention
+
+All datetimes in the system are stored and compared in **UTC**. This is critical because AWS Lambda's system clock runs in UTC, so any code that uses `datetime.now()` without an explicit timezone produces UTC on Lambda but local time on a developer's machine — causing silent comparison bugs.
+
+### Rules
+
+| Layer | Rule |
+|---|---|
+| Backend (Python) | Always use `datetime.now(timezone.utc).replace(tzinfo=None)` for "now". Never use `datetime.now()` or `datetime.utcnow()`. |
+| Backend (parsing) | Parse incoming ISO strings with `datetime.fromisoformat(s.replace('Z', '+00:00'))`, then convert to UTC-naive via `.astimezone(timezone.utc).replace(tzinfo=None)`. |
+| Database | Stores UTC-naive datetimes. No timezone column — UTC is the implicit contract. |
+| Frontend (sending) | Slot times are sent as UTC ISO strings using `new Date(...).toISOString()` (e.g. `2026-04-28T19:00:00.000Z`). |
+| Frontend (receiving) | Stored slot times returned from the API are UTC-naive strings. Append `Z` before passing to `new Date()` so the browser converts to local time correctly: `new Date(slotTime + 'Z')`. |
+
+### Why naive UTC (not timezone-aware)?
+
+SQLAlchemy's `DateTime` column (without `timezone=True`) stores and returns naive datetimes. Keeping everything as UTC-naive avoids SQLAlchemy/asyncpg timezone coercion surprises while still being unambiguous — as long as the UTC convention is consistently applied.
+
+---
+
 ## Security Layers
 
 | Layer | Mechanism |

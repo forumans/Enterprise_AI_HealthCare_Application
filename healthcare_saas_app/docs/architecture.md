@@ -10,9 +10,9 @@ The application follows a serverless, cloud-native architecture on AWS. The fron
 
 ```
                         ┌─────────────────────────────────────────────┐
-                        │              AWS CloudFront CDN              │
-                        │  d_______________.cloudfront.net             │
-                        │                                              │
+                        │              AWS CloudFront CDN             │
+                        │  d_______________.cloudfront.net            │
+                        │                                             │
                         │  Default behavior  →  S3 (frontend assets)  │
                         │  /api/* behavior   →  API Gateway + Lambda  │
                         └─────────────────────────────────────────────┘
@@ -27,7 +27,7 @@ The application follows a serverless, cloud-native architecture on AWS. The fron
         │  /assets/*.css    │                                          ▼
         └───────────────────┘                             ┌──────────────────────────┐
                                                           │   AWS Lambda Function    │
-                                                          │   Python 3.12, 512 MB   │
+                                                          │   Python 3.12, 512 MB    │
                                                           │                          │
                                                           │   Mangum (ASGI adapter)  │
                                                           │        ↕                 │
@@ -40,8 +40,8 @@ The application follows a serverless, cloud-native architecture on AWS. The fron
                                                                        │ (VPC / port 5432)
                                                                        ▼
                                                           ┌──────────────────────────┐
-                                                          │   RDS PostgreSQL          │
-                                                          │   db.t4g.micro            │
+                                                          │   RDS PostgreSQL         │
+                                                          │   db.t4g.micro           │
                                                           │   Private VPC subnets    │
                                                           └──────────────────────────┘
                                                                        

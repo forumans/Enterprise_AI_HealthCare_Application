@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -898,20 +898,15 @@ async def upsert_doctor_availability(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Doctor profile not found.")
 
     try:
-        # Parse the ISO string - it should be local time from frontend
-        slot_time = datetime.fromisoformat(payload.slot)
-        
-        # Ensure it's timezone-naive (local time)
+        slot_time = datetime.fromisoformat(payload.slot.replace('Z', '+00:00'))
+        # Normalise to UTC-naive for storage and comparison
         if slot_time.tzinfo is not None:
-            # Convert to naive local time by removing timezone info
-            slot_time = slot_time.replace(tzinfo=None)
+            slot_time = slot_time.astimezone(timezone.utc).replace(tzinfo=None)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid slot timestamp.") from exc
 
-    # Get current local time for comparison
-    now = datetime.now()
-    
-    # Compare local times
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+
     if slot_time < now:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot update slots earlier than now.")
     if slot_time > now + timedelta(days=30):

@@ -144,14 +144,16 @@ export function ManageAvailabilityPage({ auth }: ManageAvailabilityPageProps) {
     if (period === "PM" && hour !== 12) hour += 12;
     if (period === "AM" && hour === 12) hour = 0;
     
-    // Create local datetime and convert to UTC
+    // Build the UTC ISO string the backend expects
     const localDateTime = new Date(year, month - 1, date, hour, 0, 0);
+    const utcSlotString = localDateTime.toISOString();
+
+    // Local time string used only for matching calendar cells against stored UTC slot times
     const localTimeString = `${year.toString().padStart(4, '0')}-${(month).toString().padStart(2, '0')}-${date.toString().padStart(2, '0')}T${hour.toString().padStart(2, '0')}:00:00`;
-    
-    // Try to find the slot in different formats
+
     const existingSlot = availability.find(a => {
-      // Normalize both to local time format for comparison
-      const slotTime = new Date(a.slot_time);
+      // Stored slot times are UTC-naive; append Z so the browser converts to local for comparison
+      const slotTime = new Date(a.slot_time + 'Z');
       const slotTimeString = `${slotTime.getFullYear().toString().padStart(4, '0')}-${(slotTime.getMonth() + 1).toString().padStart(2, '0')}-${slotTime.getDate().toString().padStart(2, '0')}T${slotTime.getHours().toString().padStart(2, '0')}:00:00`;
       return slotTimeString === localTimeString;
     });
@@ -164,7 +166,7 @@ export function ManageAvailabilityPage({ auth }: ManageAvailabilityPageProps) {
           // User cancelled
           return;
         }
-        const response = await api.upsertDoctorAvailability(currentDoctor.id, localTimeString, true, auth.session.accessToken, blockReason);
+        const response = await api.upsertDoctorAvailability(currentDoctor.id, utcSlotString, true, auth.session.accessToken, blockReason);
         setMessage("Slot unblocked successfully");
         setMessageType("success");
       } else if (existingSlot?.status === "AVAILABLE") {
@@ -174,12 +176,12 @@ export function ManageAvailabilityPage({ auth }: ManageAvailabilityPageProps) {
           // User cancelled
           return;
         }
-        const response = await api.upsertDoctorAvailability(currentDoctor.id, localTimeString, false, auth.session.accessToken, blockReason);
+        const response = await api.upsertDoctorAvailability(currentDoctor.id, utcSlotString, false, auth.session.accessToken, blockReason);
         setMessage("Slot blocked successfully");
         setMessageType("success");
       } else {
         // Add the slot as available
-        const response = await api.upsertDoctorAvailability(currentDoctor.id, localTimeString, true, auth.session.accessToken);
+        const response = await api.upsertDoctorAvailability(currentDoctor.id, utcSlotString, true, auth.session.accessToken);
         setMessage("Slot added successfully");
         setMessageType("success");
       }
@@ -293,8 +295,8 @@ export function ManageAvailabilityPage({ auth }: ManageAvailabilityPageProps) {
                     })()}:00:00`;
                     
                     const slotAvailability = availability.find(a => {
-                      // Normalize both to local time format for comparison
-                      const slotTime = new Date(a.slot_time);
+                      // Stored slot times are UTC-naive; append Z so the browser converts to local for comparison
+                      const slotTime = new Date(a.slot_time + 'Z');
                       const slotTimeString = `${slotTime.getFullYear().toString().padStart(4, '0')}-${(slotTime.getMonth() + 1).toString().padStart(2, '0')}-${slotTime.getDate().toString().padStart(2, '0')}T${slotTime.getHours().toString().padStart(2, '0')}:00:00`;
                       return slotTimeString === isoString;
                     });

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -53,7 +53,9 @@ async def create_appointment(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Patient profile not found.")
 
     try:
-        appointment_time = datetime.fromisoformat(payload.slot)
+        appointment_time = datetime.fromisoformat(payload.slot.replace('Z', '+00:00'))
+        if appointment_time.tzinfo is not None:
+            appointment_time = appointment_time.astimezone(timezone.utc).replace(tzinfo=None)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid slot timestamp.") from exc
 

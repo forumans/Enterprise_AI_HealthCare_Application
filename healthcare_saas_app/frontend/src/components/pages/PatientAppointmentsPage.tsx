@@ -202,16 +202,18 @@ export function PatientAppointmentsPage({ auth, appointments, userData }: Patien
       alert("Please provide a reason for the appointment.");
       return;
     }
-    
+
     if (!selectedDoctorId) {
       alert("Please select a doctor.");
       return;
     }
 
     try {
+      // isoString is a naive local-time string used for display; convert to UTC for the API
+      const utcSlot = new Date(isoString).toISOString();
       const result = await api.bookAppointment(auth.session.accessToken, {
         doctor_id: selectedDoctorId,
-        slot: isoString,
+        slot: utcSlot,
         reason: appointmentReason.trim()
       });
       
@@ -424,15 +426,22 @@ export function PatientAppointmentsPage({ auth, appointments, userData }: Patien
                             const isoString = `${col.year.toString().padStart(4, '0')}-${(col.month).toString().padStart(2, '0')}-${col.date.toString().padStart(2, '0')}T${slotHour24.toString().padStart(2, '0')}:00:00`;
                             
                             // Check if this slot is already booked by the patient
+                            // apt.appointment_time is a UTC-naive string from the server — append Z before parsing
                             const isPatientBooked = patientAppointments.some(apt => {
-                              const aptTime = new Date(apt.appointment_time);
+                              const aptTime = new Date(apt.appointment_time + 'Z');
                               const slotTime = new Date(isoString);
                               const isSameTime = Math.abs(aptTime.getTime() - slotTime.getTime()) < 60000;
                               return isSameTime && (apt.status === 'SCHEDULED' || apt.status === 'CONFIRMED');
                             });
-                            
-                            // Check if this slot is available for the selected doctor
-                            const slotAvailability = doctorAvailability.find(a => a.slot_time === isoString);
+
+                            // Check if this slot is available for the selected doctor.
+                            // slot_time values from the server are UTC-naive; append Z so the browser converts
+                            // to local time before comparing against the calendar cell's local isoString.
+                            const slotAvailability = doctorAvailability.find(a => {
+                              const slotTime = new Date(a.slot_time + 'Z');
+                              const slotTimeString = `${slotTime.getFullYear().toString().padStart(4, '0')}-${(slotTime.getMonth() + 1).toString().padStart(2, '0')}-${slotTime.getDate().toString().padStart(2, '0')}T${slotTime.getHours().toString().padStart(2, '0')}:00:00`;
+                              return slotTimeString === isoString;
+                            });
                             const isAvailable = !isPatientBooked && selectedDoctorId && slotAvailability && slotAvailability.status === "AVAILABLE";
                             
                             // Check if slot is booked

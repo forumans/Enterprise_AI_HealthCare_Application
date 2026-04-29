@@ -264,7 +264,7 @@ async def list_availability_next_30_days(
     doctor_id: str,
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    now = datetime.now()  # Use local time instead of UTC
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     end_date = now + timedelta(days=30)
 
     stmt = (
@@ -341,7 +341,7 @@ async def list_all_availability(
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     """Get all availability (both available and booked) for a doctor."""
-    now = datetime.now()  # Use local time instead of UTC
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     end_date = now + timedelta(days=days)
 
     # First check if doctor exists

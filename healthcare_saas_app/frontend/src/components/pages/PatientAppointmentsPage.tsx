@@ -7,6 +7,7 @@
 
 import React, { useState, useEffect } from "react";
 import { api } from "../../api";
+import { parseServerDate } from "../../utils";
 import type { SessionState, AppointmentRow } from "../../types/app";
 
 interface PatientAppointmentsPageProps {
@@ -101,21 +102,21 @@ export function PatientAppointmentsPage({ auth, appointments, userData }: Patien
 
   // Filter and sort upcoming and past appointments
   const upcomingAppointments = appointments.appointments
-    .filter((apt: AppointmentRow) => new Date(apt.appointment_time) > new Date())
-    .sort((a: AppointmentRow, b: AppointmentRow) => new Date(a.appointment_time).getTime() - new Date(b.appointment_time).getTime());
+    .filter((apt: AppointmentRow) => parseServerDate(apt.appointment_time) > new Date())
+    .sort((a: AppointmentRow, b: AppointmentRow) => parseServerDate(a.appointment_time).getTime() - parseServerDate(b.appointment_time).getTime());
 
   const pastAppointments = appointments.appointments
-    .filter((apt: AppointmentRow) => new Date(apt.appointment_time) <= new Date())
-    .sort((a: AppointmentRow, b: AppointmentRow) => new Date(b.appointment_time).getTime() - new Date(a.appointment_time).getTime());
+    .filter((apt: AppointmentRow) => parseServerDate(apt.appointment_time) <= new Date())
+    .sort((a: AppointmentRow, b: AppointmentRow) => parseServerDate(b.appointment_time).getTime() - parseServerDate(a.appointment_time).getTime());
 
   // Limit past appointments to 5 unless "show more" is clicked
-  const displayedPastAppointments = showAllPastAppointments 
-    ? pastAppointments 
+  const displayedPastAppointments = showAllPastAppointments
+    ? pastAppointments
     : pastAppointments.slice(0, 5);
 
   // Format date for display
   const formatDate = (dateStr: string) => {
-    const date = new Date(dateStr);
+    const date = parseServerDate(dateStr);
     return date.toLocaleDateString('en-US', { 
       weekday: 'long', 
       year: 'numeric', 
@@ -426,19 +427,17 @@ export function PatientAppointmentsPage({ auth, appointments, userData }: Patien
                             const isoString = `${col.year.toString().padStart(4, '0')}-${(col.month).toString().padStart(2, '0')}-${col.date.toString().padStart(2, '0')}T${slotHour24.toString().padStart(2, '0')}:00:00`;
                             
                             // Check if this slot is already booked by the patient
-                            // apt.appointment_time is a UTC-naive string from the server — append Z before parsing
                             const isPatientBooked = patientAppointments.some(apt => {
-                              const aptTime = new Date(apt.appointment_time + 'Z');
+                              const aptTime = parseServerDate(apt.appointment_time);
                               const slotTime = new Date(isoString);
                               const isSameTime = Math.abs(aptTime.getTime() - slotTime.getTime()) < 60000;
                               return isSameTime && (apt.status === 'SCHEDULED' || apt.status === 'CONFIRMED');
                             });
 
-                            // Check if this slot is available for the selected doctor.
-                            // slot_time values from the server are UTC-naive; append Z so the browser converts
-                            // to local time before comparing against the calendar cell's local isoString.
+                            // Check if this slot is available for the selected doctor, comparing
+                            // against the calendar cell's local isoString.
                             const slotAvailability = doctorAvailability.find(a => {
-                              const slotTime = new Date(a.slot_time + 'Z');
+                              const slotTime = parseServerDate(a.slot_time);
                               const slotTimeString = `${slotTime.getFullYear().toString().padStart(4, '0')}-${(slotTime.getMonth() + 1).toString().padStart(2, '0')}-${slotTime.getDate().toString().padStart(2, '0')}T${slotTime.getHours().toString().padStart(2, '0')}:00:00`;
                               return slotTimeString === isoString;
                             });

@@ -7,6 +7,7 @@
 import React, { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../../api";
+import { parseServerDate } from "../../utils";
 import type { SessionState } from "../../types/app";
 
 interface EnhancedAppointment {
@@ -114,7 +115,7 @@ export function TodayAppointmentsPage({ auth, userData, appointments }: TodayApp
         // Filter both confirmed and scheduled appointments
         const validAppointments = data.filter(apt => apt.status === 'CONFIRMED' || apt.status === 'SCHEDULED');
         // Sort by time
-        validAppointments.sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime());
+        validAppointments.sort((a, b) => parseServerDate(a.time).getTime() - parseServerDate(b.time).getTime());
         setTodayAppointments(validAppointments);
       } catch (err) {
         setError("Failed to load today's appointments");
@@ -128,7 +129,7 @@ export function TodayAppointmentsPage({ auth, userData, appointments }: TodayApp
   }, [auth.session.accessToken]);
 
   const formatTime = (timeStr: string) => {
-    const date = new Date(timeStr);
+    const date = parseServerDate(timeStr);
     return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
   };
 
@@ -144,7 +145,7 @@ export function TodayAppointmentsPage({ auth, userData, appointments }: TodayApp
       // Refresh the appointments list
       const data = await api.getTodayAppointments(auth.session.accessToken);
       const validAppointments = data.filter(apt => apt.status === 'CONFIRMED' || apt.status === 'SCHEDULED');
-      validAppointments.sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime());
+      validAppointments.sort((a, b) => parseServerDate(a.time).getTime() - parseServerDate(b.time).getTime());
       setTodayAppointments(validAppointments);
       
       alert("Appointment confirmed successfully");

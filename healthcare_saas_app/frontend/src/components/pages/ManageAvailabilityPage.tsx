@@ -7,7 +7,7 @@
 import React, { useState, useEffect } from "react";
 import { api } from "../../api";
 import { useAuthContext } from "../../contexts/AuthContext";
-import { parseErrorMessage } from "../../utils";
+import { parseErrorMessage, parseServerDate } from "../../utils";
 import type { SessionState } from "../../types/app";
 
 interface ManageAvailabilityPageProps {
@@ -152,8 +152,7 @@ export function ManageAvailabilityPage({ auth }: ManageAvailabilityPageProps) {
     const localTimeString = `${year.toString().padStart(4, '0')}-${(month).toString().padStart(2, '0')}-${date.toString().padStart(2, '0')}T${hour.toString().padStart(2, '0')}:00:00`;
 
     const existingSlot = availability.find(a => {
-      // Stored slot times are UTC-naive; append Z so the browser converts to local for comparison
-      const slotTime = new Date(a.slot_time + 'Z');
+      const slotTime = parseServerDate(a.slot_time);
       const slotTimeString = `${slotTime.getFullYear().toString().padStart(4, '0')}-${(slotTime.getMonth() + 1).toString().padStart(2, '0')}-${slotTime.getDate().toString().padStart(2, '0')}T${slotTime.getHours().toString().padStart(2, '0')}:00:00`;
       return slotTimeString === localTimeString;
     });
@@ -295,8 +294,7 @@ export function ManageAvailabilityPage({ auth }: ManageAvailabilityPageProps) {
                     })()}:00:00`;
                     
                     const slotAvailability = availability.find(a => {
-                      // Stored slot times are UTC-naive; append Z so the browser converts to local for comparison
-                      const slotTime = new Date(a.slot_time + 'Z');
+                      const slotTime = parseServerDate(a.slot_time);
                       const slotTimeString = `${slotTime.getFullYear().toString().padStart(4, '0')}-${(slotTime.getMonth() + 1).toString().padStart(2, '0')}-${slotTime.getDate().toString().padStart(2, '0')}T${slotTime.getHours().toString().padStart(2, '0')}:00:00`;
                       return slotTimeString === isoString;
                     });

@@ -7,7 +7,7 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../../api";
-import { parseErrorMessage, delay } from "../../utils";
+import { parseErrorMessage, delay, parseServerDate } from "../../utils";
 import { APPOINTMENT_STATUS_REDIRECT_DELAY } from "../../constants";
 import type { SessionState, ConsultationState } from "../../types/app";
 
@@ -192,7 +192,7 @@ export function ConsultationForm({ session, appointmentId }: ConsultationFormPro
             <div>
               <strong style={{ color: '#42b5f5' }}>Date & Time:</strong>
               <p style={{ margin: '4px 0 0 0', color: '#eef8ff' }}>
-                {new Date(appointment.time).toLocaleString('en-US', { 
+                {parseServerDate(appointment.time).toLocaleString('en-US', {
                   weekday: 'short', 
                   month: 'short', 
                   day: 'numeric', 

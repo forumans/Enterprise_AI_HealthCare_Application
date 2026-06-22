@@ -7,7 +7,7 @@
 import React, { useState, useEffect } from "react";
 import { api } from "../../api";
 import { useAuthContext } from "../../contexts/AuthContext";
-import { parseErrorMessage } from "../../utils";
+import { parseErrorMessage, parseServerDate } from "../../utils";
 import { LabeledField } from "../common/LabeledField";
 import type { SessionState, PatientSearchRow } from "../../types";
 
@@ -291,13 +291,13 @@ function PatientSearchResults({ rows, session }: { rows: PatientSearchRow[]; ses
                   <td style={{ padding: '12px', color: '#eef8ff', borderBottom: '1px solid #334155' }}>
                     {row.prescription_date ? (
                       <div>
-                        <div>{new Date(row.prescription_date).toLocaleDateString('en-US', { 
+                        <div>{parseServerDate(row.prescription_date).toLocaleDateString('en-US', {
                           year: 'numeric',
-                          month: 'short', 
+                          month: 'short',
                           day: 'numeric'
                         })}</div>
                         <div style={{ fontSize: '12px', color: '#b4cce2' }}>
-                          {new Date(row.prescription_date).toLocaleTimeString('en-US', { 
+                          {parseServerDate(row.prescription_date).toLocaleTimeString('en-US', {
                             hour: '2-digit',
                             minute: '2-digit'
                           })}

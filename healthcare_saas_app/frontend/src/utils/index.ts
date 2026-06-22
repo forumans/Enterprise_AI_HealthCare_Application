@@ -32,17 +32,32 @@ export function convertDateFormat(dateString: string): string | undefined {
 }
 
 /**
+ * Parses a datetime string from the backend as UTC.
+ * The API serializes naive UTC datetimes without a timezone suffix
+ * (e.g. "2026-06-23T12:00:00"). New Date() treats such strings as
+ * local time, which silently shifts the displayed time by the
+ * browser's UTC offset. Append 'Z' so it's parsed as UTC, unless an
+ * offset is already present.
+ * @param dateStr - The datetime string returned by the API
+ * @returns A Date representing the correct UTC instant
+ */
+export function parseServerDate(dateStr: string): Date {
+  const hasTimezone = /Z$|[+-]\d\d:?\d\d$/.test(dateStr);
+  return new Date(hasTimezone ? dateStr : `${dateStr}Z`);
+}
+
+/**
  * Formats a date string for display
  * @param timeStr - The time string to format
  * @returns Formatted date string
  */
 export function formatTime(timeStr: string): string {
-  const date = new Date(timeStr);
-  return date.toLocaleString('en-US', { 
-    weekday: 'short', 
-    month: 'short', 
-    day: 'numeric', 
-    hour: '2-digit', 
+  const date = parseServerDate(timeStr);
+  return date.toLocaleString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
     minute: '2-digit'
   });
 }

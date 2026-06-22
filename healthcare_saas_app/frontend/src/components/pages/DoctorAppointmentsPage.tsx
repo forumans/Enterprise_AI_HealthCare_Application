@@ -6,6 +6,7 @@
 
 import React, { useState, useEffect } from "react";
 import { api } from "../../api";
+import { parseServerDate } from "../../utils";
 import type { SessionState, DoctorAppointmentRow } from "../../types/app";
 
 interface DoctorAppointmentsPageProps {
@@ -129,16 +130,17 @@ export function DoctorAppointmentsPage({ auth, appointments }: DoctorAppointment
   
   // Group appointments by date and time
   const getAppointmentsForDate = (date: Date) => {
-    const dateStr = date.toISOString().split('T')[0];
     return appointments.doctorAppointments.filter((apt: DoctorAppointmentRow) => {
-      const aptDate = new Date(apt.time).toISOString().split('T')[0];
-      return aptDate === dateStr;
+      const aptDate = parseServerDate(apt.time);
+      return aptDate.getFullYear() === date.getFullYear() &&
+        aptDate.getMonth() === date.getMonth() &&
+        aptDate.getDate() === date.getDate();
     });
   };
-  
+
   // Format time for display
   const formatTime = (timeStr: string) => {
-    const date = new Date(timeStr);
+    const date = parseServerDate(timeStr);
     return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
   };
   
@@ -209,24 +211,16 @@ export function DoctorAppointmentsPage({ auth, appointments }: DoctorAppointment
               <strong style={{ color: '#42b5f5', fontSize: '12px', textTransform: 'uppercase' }}>Date/Time:</strong>
               <p style={{ margin: '4px 0 0 0', color: '#eef8ff', fontSize: '14px' }}>
                 {(() => {
-                  // Parse the date and handle timezone properly
-                  const date = new Date(selectedPatient.time);
-                  
-                  // Get UTC components to avoid timezone issues
-                  const utcMonth = String(date.getUTCMonth() + 1).padStart(2, '0');
-                  const utcDay = String(date.getUTCDate()).padStart(2, '0');
-                  const utcYear = date.getUTCFullYear();
-                  const utcHours = String(date.getUTCHours()).padStart(2, '0');
-                  const utcMinutes = String(date.getUTCMinutes()).padStart(2, '0');
-                  
-                  // Convert UTC to local time for display
-                  const localDate = new Date(date.getTime() + (date.getTimezoneOffset() * 60000));
-                  const localHours = String(localDate.getHours()).padStart(2, '0');
-                  const localMinutes = String(localDate.getMinutes()).padStart(2, '0');
-                  
-                  const formattedTime = `${parseInt(localHours) > 12 ? parseInt(localHours) - 12 : parseInt(localHours)}:${localMinutes} ${parseInt(localHours) >= 12 ? 'PM' : 'AM'}`;
-                  
-                  return `${utcMonth}/${utcDay}/${utcYear} ${formattedTime}`;
+                  const date = parseServerDate(selectedPatient.time);
+                  const month = String(date.getMonth() + 1).padStart(2, '0');
+                  const day = String(date.getDate()).padStart(2, '0');
+                  const year = date.getFullYear();
+                  const hours = date.getHours();
+                  const minutes = String(date.getMinutes()).padStart(2, '0');
+
+                  const formattedTime = `${hours % 12 === 0 ? 12 : hours % 12}:${minutes} ${hours >= 12 ? 'PM' : 'AM'}`;
+
+                  return `${month}/${day}/${year} ${formattedTime}`;
                 })()}
               </p>
             </div>

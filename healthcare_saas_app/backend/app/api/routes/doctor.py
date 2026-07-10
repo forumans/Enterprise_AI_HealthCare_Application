@@ -331,11 +331,10 @@ async def list_availability_next_30_days(
                 await db.commit()
             except Exception as e:
                 await db.rollback()
-                # Return empty list if we can't create default slots
                 return []
-            
-            return default_slots[:20]  # Return first 20 slots
-    
+
+            return default_slots
+
     return [{"slot_time": row.isoformat()} for row in rows]
 
             # ... (rest of the code remains the same)
@@ -410,14 +409,11 @@ async def list_all_availability(
             
             # Commit the default slots
             await db.commit()
-            return default_slots[:20]  # Return first 20 slots
+            return default_slots
         except Exception as e:
             await db.rollback()
-            # Return empty list if we can't create default slots
             return []
-        
-        return default_slots[:20]  # Return first 20 slots
-    
+
     # Get active appointments for these slots (only non-cancelled ones)
     slot_times = [row.slot_time for row in availability_rows]
     appointment_stmt = (

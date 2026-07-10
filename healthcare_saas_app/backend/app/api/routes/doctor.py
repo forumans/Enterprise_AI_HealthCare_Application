@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from datetime import date, datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
+
+# Clinic's local timezone — used to convert office-hour slots to UTC for storage.
+# Override with the CLINIC_TIMEZONE environment variable if the clinic is not in US Eastern.
+_CLINIC_TZ = ZoneInfo(os.environ.get("CLINIC_TIMEZONE", "America/New_York"))
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -300,17 +306,18 @@ async def list_availability_next_30_days(
         ).scalar_one_or_none()
         
         if doctor:
-            # Generate some default slots for the next 7 days and save them
+            # Generate default slots for the next 7 days (8 AM–4 PM clinic local time)
+            # and store them as naive-UTC datetimes, consistent with all other slot_time values.
+            local_now = datetime.now(_CLINIC_TZ)
             default_slots = []
             try:
                 for days_ahead in range(7):
-                    date = now + timedelta(days=days_ahead)
-                    # Include weekends for 7-day availability
-                    # Add slots from 8 AM to 4 PM (every hour)
-                    for hour in range(8, 17):  # 8 AM to 4 PM (17 is exclusive)
-                        slot_time = datetime.combine(date.date(), time(hour, 0, 0))
+                    local_date = (local_now + timedelta(days=days_ahead)).date()
+                    for hour in range(8, 17):  # 8 AM to 4 PM clinic local time
+                        local_slot = datetime(local_date.year, local_date.month, local_date.day,
+                                             hour, 0, 0, tzinfo=_CLINIC_TZ)
+                        slot_time = local_slot.astimezone(timezone.utc).replace(tzinfo=None)
                         if slot_time > now:
-                            # Create and save the availability record
                             availability = DoctorAvailability(
                                 tenant_id=doctor.tenant_id,
                                 doctor_id=doctor_id,
@@ -376,20 +383,19 @@ async def list_all_availability(
     )
     availability_rows = (await db.execute(stmt)).scalars().all()
     
-    # If no availability exists, create some default slots for testing
+    # If no availability exists, generate default slots for the next 7 days
+    # (8 AM–4 PM clinic local time) stored as naive-UTC datetimes.
     if not availability_rows:
-        # Generate some default slots for the next 7 days and save them
-        from itertools import product
+        local_now = datetime.now(_CLINIC_TZ)
         default_slots = []
         try:
             for days_ahead in range(7):
-                date = now + timedelta(days=days_ahead)
-                # Include weekends for 7-day availability
-                # Add slots from 8 AM to 4 PM (every hour)
-                for hour in range(8, 17):  # 8 AM to 4 PM (17 is exclusive)
-                    slot_time = datetime.combine(date.date(), time(hour, 0, 0))
+                local_date = (local_now + timedelta(days=days_ahead)).date()
+                for hour in range(8, 17):  # 8 AM to 4 PM clinic local time
+                    local_slot = datetime(local_date.year, local_date.month, local_date.day,
+                                         hour, 0, 0, tzinfo=_CLINIC_TZ)
+                    slot_time = local_slot.astimezone(timezone.utc).replace(tzinfo=None)
                     if slot_time > now:
-                        # Create and save the availability record
                         availability = DoctorAvailability(
                             tenant_id=doctor.tenant_id,
                             doctor_id=doctor.id,

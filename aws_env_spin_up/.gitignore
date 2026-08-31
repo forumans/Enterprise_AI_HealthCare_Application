@@ -1,0 +1,2 @@
+# Contains real production secrets (DATABASE_URL, JWT_SECRET) pulled from the live Lambda.
+.env.production.backup.json

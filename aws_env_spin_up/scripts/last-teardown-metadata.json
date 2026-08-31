@@ -1,0 +1,12 @@
+{
+  "SnapshotId": "healthcare-db-final-2026-07-17-153336",
+  "DbInstanceClass": "db.t4g.micro",
+  "DbSubnetGroupName": "default-vpc-023a0816c81ec86a4",
+  "VpcSecurityGroupIds": [
+    "sg-02a345de12bfe50b4"
+  ],
+  "Engine": "postgres",
+  "EngineVersion": "17.9",
+  "DbName": "healthcare_saas",
+  "TornDownAt": "2026-07-17T19:42:46.740003+00:00"
+}

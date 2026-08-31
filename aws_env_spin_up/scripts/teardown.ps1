@@ -28,19 +28,27 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$Region       = "us-east-1"
 $StackName    = "healthcare-backend"
 $DbInstanceId = "healthcare-db"
-$DbHost       = "healthcare-db.cg3g0oqwisy4.us-east-1.rds.amazonaws.com"
 $DbName       = "healthcare_saas"
 $DbUser       = "healthcare_user"
-$VpcSubnets   = @("subnet-04dbe0922a7249d51", "subnet-02167dbc45e42d274")
 
 $ScriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectDir = Split-Path -Parent $ScriptDir
 $RepoRoot   = Split-Path -Parent $ProjectDir
 $BackendDir = Join-Path $RepoRoot "healthcare_saas_app\backend"
 $SnapshotId = "healthcare-db-final-$(Get-Date -Format 'yyyy-MM-dd-HHmmss')"
+
+# Real account-specific identifiers (RDS endpoint, subnet IDs) live in this gitignored file, not
+# in the script - see aws-config.example.json for the shape. Never commit aws-config.local.json.
+$ConfigFile = Join-Path $ScriptDir "aws-config.local.json"
+if (-not (Test-Path $ConfigFile)) {
+    throw "Missing $ConfigFile. Copy aws-config.example.json to aws-config.local.json and fill in your real AWS values."
+}
+$Config     = Get-Content $ConfigFile -Raw | ConvertFrom-Json
+$Region     = $Config.Region
+$DbHost     = $Config.DbHost
+$VpcSubnets = $Config.VpcSubnetIds
 
 Write-Host "=== Step 1: Backup ===" -ForegroundColor Cyan
 

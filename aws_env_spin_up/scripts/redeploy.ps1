@@ -15,7 +15,10 @@
     samconfig.toml - this file is a JSON dump of the live Lambda's environment
     variables, captured by teardown.ps1 before deletion). Requires
     scripts/last-teardown-metadata.json written by teardown.ps1 (subnet
-    group, security groups, snapshot id, db name).
+    group, security groups, snapshot id, db name). Requires
+    scripts/aws-config.local.json (copy from aws-config.example.json and fill
+    in your real values - account ID, bucket names, security group, subnets,
+    CloudFront domain) - kept out of git since this repo is public.
 
     Fully automated end to end - no manual console steps required. (Earlier
     versions of this script left the CloudFront origin update and the
@@ -38,7 +41,6 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$Region     = "us-east-1"
 $StackName  = "healthcare-backend"
 $ScriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectDir = Split-Path -Parent $ScriptDir
@@ -46,6 +48,15 @@ $RepoRoot   = Split-Path -Parent $ProjectDir
 $BackendDir = Join-Path $RepoRoot "healthcare_saas_app\backend"
 $MetaFile   = Join-Path $ScriptDir "last-teardown-metadata.json"
 $SecretsFile = Join-Path $ProjectDir ".env.production.backup.json"
+
+# Real account-specific identifiers (bucket names, security group, subnets, CloudFront domain)
+# live in this gitignored file, not in the script - see aws-config.example.json for the shape.
+$ConfigFile = Join-Path $ScriptDir "aws-config.local.json"
+if (-not (Test-Path $ConfigFile)) {
+    throw "Missing $ConfigFile. Copy aws-config.example.json to aws-config.local.json and fill in your real AWS values."
+}
+$Config = Get-Content $ConfigFile -Raw | ConvertFrom-Json
+$Region = $Config.Region
 
 if (-not (Test-Path $MetaFile)) {
     throw "Missing $MetaFile. Run teardown.ps1 first, or create this file manually with DbSubnetGroupName/VpcSecurityGroupIds/SnapshotId/DbName (see ../README.md)."
@@ -99,10 +110,10 @@ $DatabaseUrl = $Secrets.DATABASE_URL -replace '@[^:/]+:5432', "@${NewEndpoint}:5
 $JwtSecret   = $Secrets.JWT_SECRET
 
 # Non-secret params stay in sync with samconfig.toml - update both places if these ever change.
-$CorsOrigins           = "http://d38vpnbis6nxp0.cloudfront.net,https://d38vpnbis6nxp0.cloudfront.net"
-$DocumentsBucketName   = "healthcare-documents-697949337234"
-$LambdaSecurityGroupId = "sg-02a345de12bfe50b4"
-$PrivateSubnetIds      = "subnet-04dbe0922a7249d51,subnet-02167dbc45e42d274"
+$CorsOrigins           = "http://$($Config.CloudFrontDomain),https://$($Config.CloudFrontDomain)"
+$DocumentsBucketName   = $Config.DocumentsBucketName
+$LambdaSecurityGroupId = $Config.LambdaSecurityGroupId
+$PrivateSubnetIds      = $Config.VpcSubnetIds -join ","
 
 Push-Location $BackendDir
 try {
@@ -128,8 +139,8 @@ $ApiDomain = $ApiUrl -replace '^https://', ''
 Write-Host "New ApiUrl: $ApiUrl" -ForegroundColor Green
 
 Write-Host "`n=== Step 4: Update CloudFront /api/* origin ===" -ForegroundColor Cyan
-$CloudFrontDomain = "d38vpnbis6nxp0.cloudfront.net"
-$ApiOriginId       = "healthcare-backend-alb-402156686.us-east-1.elb.amazonaws.com"
+$CloudFrontDomain = $Config.CloudFrontDomain
+$ApiOriginId       = $Config.CloudFrontApiOriginId
 $DistId = (aws cloudfront list-distributions --query "DistributionList.Items[?DomainName=='$CloudFrontDomain'].Id" --output text)
 
 $CfConfigRaw = aws cloudfront get-distribution-config --id $DistId | ConvertFrom-Json
@@ -151,7 +162,7 @@ Write-Host "`n=== Step 5: Rebuild and redeploy the frontend ===" -ForegroundColo
 Write-Host "(Vite bakes VITE_API_BASE_URL into the JS bundle at build time - since the API Gateway URL just changed, the frontend must be rebuilt and re-uploaded, or the old bundle will call a dead endpoint.)"
 $FrontendDir = Join-Path $RepoRoot "healthcare_saas_app\frontend"
 $FrontendEnvFile = Join-Path $FrontendDir ".env.production"
-$FrontendBucket = "healthcare-frontend-20260320"
+$FrontendBucket = $Config.FrontendBucketName
 
 (Get-Content $FrontendEnvFile) -replace 'VITE_API_BASE_URL=.*', "VITE_API_BASE_URL=$ApiUrl/api" | Set-Content $FrontendEnvFile
 

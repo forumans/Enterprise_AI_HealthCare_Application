@@ -1,0 +1,10 @@
+{
+  "Region": "us-east-1",
+  "DbHost": "your-db-identifier.xxxxxxxxxxxx.us-east-1.rds.amazonaws.com",
+  "VpcSubnetIds": ["subnet-aaaaaaaaaaaaaaaaa", "subnet-bbbbbbbbbbbbbbbbb"],
+  "LambdaSecurityGroupId": "sg-xxxxxxxxxxxxxxxxx",
+  "DocumentsBucketName": "your-documents-bucket-name",
+  "FrontendBucketName": "your-frontend-bucket-name",
+  "CloudFrontDomain": "dxxxxxxxxxxxxx.cloudfront.net",
+  "CloudFrontApiOriginId": "your-cloudfront-api-origin-id"
+}

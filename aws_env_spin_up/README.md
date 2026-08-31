@@ -8,7 +8,7 @@ So "stop paying entirely" means: snapshot and delete RDS, verify there's no forg
 
 ## Current status
 
-**Torn down as of 2026-07-17** (was redeployed 2026-07-10 for a demo; no demo needed for a while, so torn down again to stop the RDS bill). Final snapshot: `healthcare-db-final-2026-07-17-153336` (see `scripts/last-teardown-metadata.json` for the exact restore parameters — same subnet group/security group/instance class as before). No NAT Gateway or unattached Elastic IP found (checked again this time). The `healthcare_saas_app/backend/.env.production.backup.json` secrets backup was refreshed from the live Lambda before deletion, in case anything had changed since the last redeploy — it hadn't. CloudFront (`http://d38vpnbis6nxp0.cloudfront.net/`) is still up; `/api/*` calls will fail until `redeploy.ps1` is run again.
+**Torn down as of 2026-07-17** (was redeployed 2026-07-10 for a demo; no demo needed for a while, so torn down again to stop the RDS bill). Final snapshot: `healthcare-db-final-2026-07-17-153336` (see the gitignored `scripts/last-teardown-metadata.json` for the exact restore parameters — same subnet group/security group/instance class as before). No NAT Gateway or unattached Elastic IP found (checked again this time). The `.env.production.backup.json` secrets backup was refreshed from the live Lambda before deletion, in case anything had changed since the last redeploy — it hadn't. CloudFront (see `scripts/aws-config.local.json` for the actual domain) is still up; `/api/*` calls will fail until `redeploy.ps1` is run again.
 
 **To bring it back up for the next demo**, run `redeploy.ps1` — see below. It's now fully automated (RDS restore, SAM deploy, CloudFront origin update, frontend rebuild/redeploy) based on the fix from the 2026-07-10 incident.
 
@@ -32,8 +32,12 @@ aws_env_spin_up/
     ├── teardown.ps1
     ├── redeploy.ps1
     ├── iam-policy-teardown-redeploy.json  (IAM policy granting the extra permissions these scripts need)
-    └── last-teardown-metadata.json        (subnet group / security groups / snapshot id / db name captured by the last teardown)
+    ├── aws-config.example.json            (tracked — placeholder shape for the real config below)
+    ├── aws-config.local.json              (gitignored — real account ID/bucket names/subnet & security-group IDs/CloudFront domain; copy from the example above and fill in)
+    └── last-teardown-metadata.json        (gitignored — subnet group / security groups / snapshot id / db name captured by the last teardown; regenerated each run)
 ```
+
+This repo is public — none of the gitignored files above should ever be committed. If you're setting this up fresh, copy `scripts/aws-config.example.json` to `scripts/aws-config.local.json` and fill in your real values before running either script.
 
 ## Prerequisites (one-time)
 
@@ -45,6 +49,7 @@ aws_env_spin_up/
   **Updated 2026-08-31**: the user's inline policies (`HealthcareAppTeardownRedeploy` + `LambdaVpcDeployAccess`) also hit their own combined 2048-byte quota, so a one-off Cost Explorer investigation couldn't add a third inline policy. `AmazonECS_FullAccess` (the other pre-Lambda leftover) was detached and `AWSBillingReadOnlyAccess` attached in its place to stay under the 10-managed-policy cap — kept permanently per the user's choice, not reverted. Current attached managed policies: `AmazonAPIGatewayAdministrator`, `AmazonEC2ContainerRegistryFullAccess`, `CloudFrontFullAccess`, `IAMFullAccess`, `SecretsManagerReadWrite`, `AmazonS3FullAccess`, `CloudWatchFullAccessV2`, `AWSCloudFormationFullAccess`, `AWSLambda_FullAccess`, `AWSBillingReadOnlyAccess`.
 
   To verify the permission is still in place: `aws iam get-user-policy --user-name healthcare_github_action_deploy --policy-name HealthcareAppTeardownRedeploy` should return the policy, and `aws rds describe-db-instances --db-instance-identifier healthcare-db --region us-east-1` should succeed without an `AccessDenied` error (only meaningful while the instance still exists).
+- **`scripts/aws-config.local.json`** with the real account-specific identifiers (RDS endpoint host, VPC subnet IDs, Lambda security group ID, S3 bucket names, CloudFront domain and API origin ID) — copy `scripts/aws-config.example.json` and fill in real values. Neither script will run without it. Kept out of git since this repo is public; the current real values can be re-derived from the live AWS resources if this file is ever lost (`aws rds describe-db-instances`, `aws s3 ls`, `aws cloudfront list-distributions`, etc.).
 - **`.env.production.backup.json`** with the real `DATABASE_URL` and `JWT_SECRET` — these are `NoEcho` SAM parameters, never saved to `samconfig.toml`. This repo's own `healthcare_saas_app/backend/.env` is set up for **local development only** (points at `localhost`, uses a placeholder `JWT_SECRET`) — it is NOT the production configuration and `redeploy.ps1` does not read it. Since the app doesn't use Secrets Manager (`AWS_SECRETS_MANAGER_ENABLED=false`), the real values can always be re-pulled from a running Lambda via `aws lambda get-function-configuration --function-name healthcare-backend-backend --region us-east-1 --query 'Environment.Variables'` — but once the Lambda is deleted, this backup file is the only remaining copy. Back it up to a password manager; if it's ever lost with no other copy, redeploy is only possible by regenerating `JWT_SECRET` (which invalidates all existing sessions).
 - **RDS is in a private VPC subnet, not publicly accessible** (confirmed in `../healthcare_saas_app/docs/deployment.md`, and confirmed empirically — `pg_dump` from a normal dev machine times out). You need one of:
   - An SSM Session Manager port-forward through a bastion/existing EC2 instance in the VPC, or
@@ -62,7 +67,7 @@ cd aws_env_spin_up/scripts
 
 This will, in order:
 1. `pg_dump --schema-only` the live database to `../healthcare_saas_app/backend/migrations/001_initial_schema.sql` (fills a gap — this file didn't exist before; only two incremental migrations did). Skipped automatically if the RDS instance isn't reachable, or explicitly via `-SkipSchemaDump`.
-2. Capture the RDS instance's subnet group, security groups, instance class, and db name to `scripts/last-teardown-metadata.json` (needed to restore an identical instance later — contains no secrets, safe to keep locally or commit).
+2. Capture the RDS instance's subnet group, security groups, instance class, and db name to `scripts/last-teardown-metadata.json` (needed to restore an identical instance later — contains no passwords, but does contain real infra identifiers, so it's gitignored, not committed).
 3. Take a final RDS snapshot named `healthcare-db-final-<timestamp>` and wait for it to finish.
 4. Check for a NAT Gateway or unattached Elastic IP in the VPC (undocumented anywhere — Lambda only needs RDS/S3 access, which doesn't require internet egress, so a NAT Gateway here would likely be a forgotten ~$32/mo cost). Prints commands to delete if found; does not delete automatically. (Checked on 2026-07-06: none found.)
 5. Prompt for a typed confirmation, then delete the CloudFormation stack (`sam delete`) and the RDS instance (`aws rds delete-db-instance --skip-final-snapshot`, safe since step 3 already snapshotted).
@@ -90,7 +95,7 @@ If `sam build` hits the OneDrive `[WinError 5]` issue noted above, build manuall
 ### Verify
 
 ```bash
-curl https://d38vpnbis6nxp0.cloudfront.net/api/health
+curl https://<your-cloudfront-domain>/api/health   # domain is in scripts/aws-config.local.json
 # expect: {"status":"healthy","database":"connected"}
 ```
 

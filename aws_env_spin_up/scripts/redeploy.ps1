@@ -117,10 +117,17 @@ $PrivateSubnetIds      = $Config.VpcSubnetIds -join ","
 
 Push-Location $BackendDir
 try {
-    sam build
+    # Build outside the repo: OneDrive locks files under .aws-sam, making sam build fail with
+    # [WinError 5]. A fresh timestamped dir each run also avoids sam's rmtree of a previous build
+    # dir, which hit the same PermissionError even outside OneDrive.
+    $SamBuildDir = Join-Path $env:TEMP ("healthcare-sam-build-" + (Get-Date -Format yyyyMMddHHmmss))
+    sam build --build-dir $SamBuildDir
     if ($LASTEXITCODE -ne 0) { throw "sam build failed." }
 
-    sam deploy --stack-name $StackName --region $Region --capabilities CAPABILITY_IAM --no-confirm-changeset `
+    # samconfig.toml is looked up next to --template-file (now in the temp build dir), so its
+    # resolve_s3/s3_prefix settings no longer apply - pass them explicitly.
+    sam deploy --template-file (Join-Path $SamBuildDir "template.yaml") --resolve-s3 --s3-prefix $StackName `
+        --stack-name $StackName --region $Region --capabilities CAPABILITY_IAM --no-confirm-changeset `
         --parameter-overrides `
         "AppEnv=production" `
         "DatabaseUrl=$DatabaseUrl" `

@@ -6,7 +6,9 @@ from backend.app.middleware import TenantContextMiddleware
 
 class ApiPrefixRouteRegistrationTests(unittest.TestCase):
     def test_api_prefixed_business_routes_are_registered(self):
-        paths = {route.path for route in app.routes}
+        # Newer FastAPI wraps included routers in objects without a `.path`, so read the
+        # resolved paths from the OpenAPI schema instead of walking app.routes.
+        paths = set(app.openapi()["paths"])
 
         self.assertIn("/api/auth/login", paths)
         self.assertIn("/api/tenants/current", paths)

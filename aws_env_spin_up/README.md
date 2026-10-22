@@ -18,7 +18,9 @@ Note: the actual live database name is `healthcare_saas`, not `healthcare_db` as
 
 - **The first redeploy on 2026-07-10 left login broken** with "Failed to fetch" even though the health check passed. Root cause: Vite bakes `VITE_API_BASE_URL` into the frontend's JS bundle at build time, and that redeploy only recreated the backend — the still-deployed frontend bundle kept calling the *old, now-deleted* API Gateway URL directly (bypassing CloudFront entirely). **`redeploy.ps1` now rebuilds and redeploys the frontend automatically** (updates `.env.production`, `npm run build`, `aws s3 sync`, CloudFront invalidation) as its last step, so this can't happen again silently. If you ever see "Failed to fetch" specifically on API calls (not on page load) after a redeploy, this bundle-staleness is the first thing to check: download the live JS bundle and grep it for `execute-api` to see what URL it actually points at.
 - **`redeploy.ps1` now also updates the CloudFront `/api/*` origin itself** (via `get-distribution-config`/`update-distribution` with the ETag) instead of leaving it as a manual console step — the account already has `CloudFrontFullAccess`, so this is safe to automate.
-- **`sam build` can fail with `[WinError 5] Access is denied`** building directly into `healthcare_saas_app/backend/.aws-sam` — a known OneDrive-sync locking issue since the repo lives under a OneDrive folder. If you hit this running the script, build manually first with `sam build --build-dir <path outside OneDrive>` and adapt, or move/symlink the repo outside OneDrive.
+- **`sam build` can fail with `[WinError 5] Access is denied`** building directly into `healthcare_saas_app/backend/.aws-sam` — a known OneDrive-sync locking issue since the repo lives under a OneDrive folder. **`redeploy.ps1` now builds into a fresh timestamped dir under `%TEMP%`** (a reused build dir hit the same `PermissionError` when sam tried to delete it) and passes `--resolve-s3`/`--s3-prefix` to `sam deploy` explicitly, since `samconfig.toml` isn't picked up once `--template-file` points outside the backend dir.
+- **Unpinned Python deps can break the Lambda on redeploy.** On the 2026-10-22 redeploy, `sqlalchemy>=2.0.0` resolved to SQLAlchemy 2.1, which no longer installs `greenlet` by default — every request failed with `Runtime.ImportModuleError` (health check returned `{"message":"Internal Server Error"}`) until `requirements.txt` was changed to `sqlalchemy[asyncio]>=2.0.0`. If the health check 500s after a redeploy, check `aws logs tail /aws/lambda/healthcare-backend-backend` first.
+- **Don't pipe `redeploy.ps1` through `*>&1`/`Tee-Object` in Windows PowerShell 5.1** — that wraps native-command stderr (sam's normal progress output) in error records, and the script's `$ErrorActionPreference = "Stop"` aborts on them.
 - **`sam` isn't on the Bash/Git-Bash PATH** but is available in PowerShell (`C:\Program Files\Amazon\AWSSAMCLI\bin`) — run these scripts from PowerShell, not Git Bash, on this machine.
 
 ## Layout
@@ -86,11 +88,9 @@ cd aws_env_spin_up/scripts
 This is now fully automated end to end — no manual console steps. It will:
 1. Restore RDS from the snapshot recorded in `last-teardown-metadata.json` (or pass `-SnapshotId` explicitly), into the same subnet group and security groups. Takes ~10-15 minutes.
 2. Print `psql` commands to apply migrations if you restored a schema-only snapshot rather than one with live data — otherwise skip (the normal case, since RDS snapshots include both).
-3. Run `sam build && sam deploy` (from `../healthcare_saas_app/backend`) using the non-secret parameters from `samconfig.toml` (CORS origins, S3 bucket, security group, subnets) plus `DATABASE_URL`/`JWT_SECRET` read from `.env.production.backup.json`, with the DB host rewritten to the new RDS endpoint.
+3. Run `sam build` (into a temp dir outside OneDrive) `&& sam deploy` (from `../healthcare_saas_app/backend`) using the non-secret parameters from `samconfig.toml` (CORS origins, S3 bucket, security group, subnets) plus `DATABASE_URL`/`JWT_SECRET` read from `.env.production.backup.json`, with the DB host rewritten to the new RDS endpoint.
 4. Update CloudFront's `/api/*` origin to the new API Gateway domain (the endpoint ID changes every time the stack is recreated) and wait for the distribution to finish propagating (~3-5 min).
 5. Rebuild the frontend with the new API URL baked in, sync it to the S3 frontend bucket, and invalidate the CloudFront cache.
-
-If `sam build` hits the OneDrive `[WinError 5]` issue noted above, build manually with `--build-dir` outside OneDrive first and re-run from there — the script doesn't yet auto-detect and work around this.
 
 ### Verify
 

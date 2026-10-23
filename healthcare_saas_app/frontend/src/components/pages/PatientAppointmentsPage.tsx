@@ -7,7 +7,7 @@
 
 import React, { useState, useEffect } from "react";
 import { api } from "../../api";
-import { OFFICE_HOUR_SLOTS, parseServerDate } from "../../utils";
+import { OFFICE_HOUR_SLOTS, parseServerDate, removeCancelledBooking } from "../../utils";
 import type { SessionState, AppointmentRow } from "../../types/app";
 
 interface PatientAppointmentsPageProps {
@@ -146,11 +146,10 @@ export function PatientAppointmentsPage({ auth, appointments, userData }: Patien
       // Refresh appointments
       await appointments.loadPatientAppointments();
 
-      // Remove the cancelled appointment from bookedAppointments state. Entries there are local
-      // calendar-cell strings while the API returns UTC timestamps, so compare instants, not strings.
-      if (cancelledAppointment?.appointment_time) {
-        const cancelledAt = parseServerDate(cancelledAppointment.appointment_time).getTime();
-        setBookedAppointments(prev => prev.filter(apt => new Date(apt.slot_time).getTime() !== cancelledAt));
+      // Free the cancelled slot in the calendar immediately.
+      const cancelledTime = cancelledAppointment?.appointment_time;
+      if (cancelledTime) {
+        setBookedAppointments(prev => removeCancelledBooking(prev, cancelledTime));
       }
       
       // Also refresh the local patientAppointments state

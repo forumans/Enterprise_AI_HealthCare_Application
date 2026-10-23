@@ -190,9 +190,10 @@ The API is available at `http://127.0.0.1:8000`, identical to Uvicorn. Cold star
 ## Running Tests
 
 ```bash
-# Backend unit tests (from backend directory)
-cd healthcare_saas_app/backend
-pytest
+# Backend tests (run from healthcare_saas_app - the tests import `backend.app...`;
+# backend/.env must be loaded into the environment, e.g. via your shell or IDE)
+cd healthcare_saas_app
+python -m unittest discover -s backend/tests -t .
 
 # Frontend unit tests
 cd healthcare_saas_app/frontend
@@ -204,6 +205,23 @@ npx playwright test --config=playwright.simple.config.ts
 
 # View E2E report
 npx playwright show-report
+```
+
+### PostgreSQL integration tests
+
+`backend/tests/integration` runs the core scheduling flows against a real PostgreSQL database:
+- **Migration 003:** every value is preserved; reruns, rollback and invalid data are handled safely.
+- **Slots:** 8 AM–11 PM default generation, including across daylight-saving changes; the rolling 7-day top-up; and concurrent loads.
+- **Appointments:** book → cancel → rebook through the booking trigger, double-booking rejection, and the clinic-local "today" and week views.
+- **Migration 004:** the evening-slot backfill.
+
+They are **skipped** unless `HC_TEST_PG_ADMIN_URL` points at a *disposable* server. Each test creates its own `hc_it_<random>` database from `baseline_schema_pre_003.sql` and drops it afterwards, so never point it at a server holding data you care about:
+
+```bash
+docker run -d --name hc-test-pg -e POSTGRES_PASSWORD=test -p 55440:5432 postgres:17
+export HC_TEST_PG_ADMIN_URL=postgresql://postgres:test@localhost:55440/postgres   # PowerShell: $env:HC_TEST_PG_ADMIN_URL="..."
+python -m unittest discover -s backend/tests -t .
+docker rm -f hc-test-pg
 ```
 
 ---

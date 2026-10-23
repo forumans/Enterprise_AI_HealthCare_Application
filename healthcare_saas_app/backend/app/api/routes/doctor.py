@@ -251,7 +251,6 @@ async def list_availability(
                 DoctorAvailability.slot_time >= day_start,
                 DoctorAvailability.slot_time < day_end,
                 DoctorAvailability.status == "AVAILABLE",
-                DoctorAvailability.deleted_at.is_(None),
             )
         )
         .order_by(DoctorAvailability.slot_time.asc())
@@ -265,22 +264,11 @@ async def list_availability_next_30_days(
     doctor_id: str,
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
+    # Read-only listing: default slots are generated only by /doctor/availability/{doctor_id}/all.
+    # (main.py lists this path as auth-excluded, but exclusions match exact paths and the
+    # "{doctor_id}" template never matches a real URL, so this endpoint does require auth.)
     now = utc_now()
     end_date = now + timedelta(days=30)
-
-    doctor = (
-        await db.execute(
-            select(Doctor).where(
-                and_(
-                    Doctor.id == doctor_id,
-                    Doctor.deleted_at.is_(None),
-                )
-            )
-        )
-    ).scalar_one_or_none()
-    if doctor:
-        # Top up default office-hour slots (8 AM–11 PM clinic local time) for the next 7 days.
-        await ensure_default_slots(db, doctor, now=now)
 
     stmt = (
         select(DoctorAvailability.slot_time)
@@ -422,7 +410,6 @@ async def upsert_availability(
             and_(
                 DoctorAvailability.doctor_id == doctor_id,
                 DoctorAvailability.slot_time == slot_time,
-                DoctorAvailability.deleted_at.is_(None),
             )
         )
     )
@@ -591,6 +578,50 @@ async def doctor_all_appointments(
     return result
 
 
+@router.get("/doctor/appointments/upcoming")
+async def doctor_appointments_upcoming(
+    identity: CurrentIdentity = Depends(require_roles("DOCTOR")),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    doctor = (
+        await db.execute(
+            select(Doctor).where(
+                Doctor.user_id == identity.user_id,
+                Doctor.tenant_id == identity.tenant_id,
+                Doctor.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if doctor is None:
+        return []
+
+    stmt = (
+        select(Appointment, Patient)
+        .join(Patient, Patient.id == Appointment.patient_id)
+        .where(
+            and_(
+                Appointment.tenant_id == identity.tenant_id,
+                Appointment.doctor_id == doctor.id,
+                Appointment.appointment_time >= utc_now(),
+                Appointment.deleted_at.is_(None),
+                Patient.deleted_at.is_(None),
+            )
+        )
+        .order_by(Appointment.appointment_time.asc())
+    )
+    rows = (await db.execute(stmt)).all()
+    return [
+        {
+            "id": appointment.id,
+            "time": appointment.appointment_time.isoformat(),
+            "patient_name": patient.full_name,
+            "status": appointment.status,
+            "urgent": "",
+        }
+        for appointment, patient in rows
+    ]
+
+
 @router.get("/doctor/appointments/{appointment_id}")
 async def doctor_get_appointment_details(
     appointment_id: str,
@@ -642,115 +673,6 @@ async def doctor_get_appointment_details(
         "status": appointment.status,
         "notes": appointment.notes,
     }
-
-
-@router.get("/doctor/appointments/today")
-async def doctor_appointments_today(
-    identity: CurrentIdentity = Depends(require_roles("DOCTOR")),
-    db: AsyncSession = Depends(get_db),
-) -> list[dict]:
-    start, end = clinic_day_bounds(clinic_today())
-
-    doctor = (
-        await db.execute(
-            select(Doctor).where(
-                Doctor.user_id == identity.user_id,
-                Doctor.tenant_id == identity.tenant_id,
-                Doctor.deleted_at.is_(None),
-            )
-        )
-    ).scalar_one_or_none()
-    if doctor is None:
-        return []
-
-    stmt = (
-        select(Appointment, Patient)
-        .join(Patient, Patient.id == Appointment.patient_id)
-        .where(
-            and_(
-                Appointment.tenant_id == identity.tenant_id,
-                Appointment.doctor_id == doctor.id,
-                Appointment.appointment_time >= start,
-                Appointment.appointment_time < end,
-                Appointment.deleted_at.is_(None),
-                Patient.deleted_at.is_(None),
-            )
-        )
-        .order_by(Appointment.appointment_time.asc())
-    )
-    rows = (await db.execute(stmt)).all()
-    return [
-        {
-            "id": appointment.id,
-            "time": appointment.appointment_time.isoformat(),
-            "patient_name": patient.full_name,
-            "status": appointment.status,
-            "urgent": "",
-        }
-        for appointment, patient in rows
-    ]
-
-
-@router.get("/doctor/appointments/all")
-async def doctor_all_appointments(
-    from_date: date | None = None,
-    identity: CurrentIdentity = Depends(require_roles("DOCTOR")),
-    db: AsyncSession = Depends(get_db),
-) -> list[dict]:
-    """Get all appointments for a given week without date restrictions."""
-    print(f"DEBUG: doctor_all_appointments called - user_id: {identity.user_id}")
-    
-    anchor = from_date or clinic_today()
-    
-    doctor = (
-        await db.execute(
-            select(Doctor).where(
-                Doctor.user_id == identity.user_id,
-                Doctor.tenant_id == identity.tenant_id,
-                Doctor.deleted_at.is_(None),
-            )
-        )
-    ).scalar_one_or_none()
-    
-    print(f"DEBUG: doctor lookup result: {doctor}")
-    if doctor is None:
-        print("DEBUG: No doctor found, returning empty list")
-        return []
-
-    week_start, week_end = clinic_week_bounds(anchor)
-    
-    stmt = (
-        select(Appointment, Patient)
-        .join(Patient, Patient.id == Appointment.patient_id)
-        .where(
-            and_(
-                Appointment.tenant_id == identity.tenant_id,
-                Appointment.doctor_id == doctor.id,
-                Appointment.appointment_time >= week_start,
-                Appointment.appointment_time < week_end,
-                Appointment.deleted_at.is_(None),
-                Patient.deleted_at.is_(None),
-            )
-        )
-        .order_by(Appointment.appointment_time.asc())
-    )
-    rows = (await db.execute(stmt)).all()
-    
-    print(f"DEBUG: Found {len(rows)} appointments")
-    
-    result = [
-        {
-            "id": appointment.id,
-            "time": appointment.appointment_time.isoformat(),
-            "patient_name": patient.full_name,
-            "symptoms": appointment.notes or "",
-            "status": appointment.status,
-        }
-        for appointment, patient in rows
-    ]
-    
-    print(f"DEBUG: Returning {len(result)} appointments")
-    return result
 
 
 @router.get("/doctor/appointments")
@@ -892,50 +814,6 @@ async def upsert_doctor_availability(
             await db.commit()
             return {"message": "Slot blocked successfully"}
     return {"message": "Availability updated."}
-
-
-@router.get("/doctor/appointments/upcoming")
-async def doctor_appointments_upcoming(
-    identity: CurrentIdentity = Depends(require_roles("DOCTOR")),
-    db: AsyncSession = Depends(get_db),
-) -> list[dict]:
-    doctor = (
-        await db.execute(
-            select(Doctor).where(
-                Doctor.user_id == identity.user_id,
-                Doctor.tenant_id == identity.tenant_id,
-                Doctor.deleted_at.is_(None),
-            )
-        )
-    ).scalar_one_or_none()
-    if doctor is None:
-        return []
-
-    stmt = (
-        select(Appointment, Patient)
-        .join(Patient, Patient.id == Appointment.patient_id)
-        .where(
-            and_(
-                Appointment.tenant_id == identity.tenant_id,
-                Appointment.doctor_id == doctor.id,
-                Appointment.appointment_time >= utc_now(),
-                Appointment.deleted_at.is_(None),
-                Patient.deleted_at.is_(None),
-            )
-        )
-        .order_by(Appointment.appointment_time.asc())
-    )
-    rows = (await db.execute(stmt)).all()
-    return [
-        {
-            "id": appointment.id,
-            "time": appointment.appointment_time.isoformat(),
-            "patient_name": patient.full_name,
-            "status": appointment.status,
-            "urgent": "",
-        }
-        for appointment, patient in rows
-    ]
 
 
 @router.get("/patients/search")

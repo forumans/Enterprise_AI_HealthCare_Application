@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from .config import settings
 
@@ -41,3 +42,20 @@ async def get_db() -> AsyncSession:
 
     async with get_session_maker()() as session:
         yield session
+
+
+async def find_naive_timestamp_columns(conn: AsyncConnection) -> list[str]:
+    """Return `table.column` for every public column still typed `timestamp without time zone`.
+
+    The backend binds timezone-aware datetimes, so any such column means migration 003 hasn't
+    been applied and writes would be silently shifted into the server's TimeZone.
+    """
+
+    result = await conn.execute(
+        text(
+            "SELECT table_name || '.' || column_name FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND data_type = 'timestamp without time zone' "
+            "ORDER BY 1"
+        )
+    )
+    return list(result.scalars().all())

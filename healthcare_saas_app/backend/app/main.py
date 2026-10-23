@@ -16,14 +16,13 @@ from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer
-from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from fastapi.middleware.cors import CORSMiddleware
 
 from .api.routes import api_router
 from .api.health import router as health_router
 from .core.config import settings
-from .core.database import get_engine
+from .core.database import find_naive_timestamp_columns, get_engine
 from .middleware import AuditContextMiddleware, SecurityHeadersMiddleware, TenantContextMiddleware
 from .models.base import Base
 
@@ -142,15 +141,7 @@ def create_app() -> FastAPI:
 
         try:
             async with get_engine().connect() as conn:
-                naive_columns = (
-                    await conn.execute(
-                        text(
-                            "SELECT table_name || '.' || column_name FROM information_schema.columns "
-                            "WHERE table_schema = 'public' AND data_type = 'timestamp without time zone' "
-                            "ORDER BY 1"
-                        )
-                    )
-                ).scalars().all()
+                naive_columns = await find_naive_timestamp_columns(conn)
         except SQLAlchemyError:
             # Don't block startup when the DB is unreachable - the health endpoint reports that.
             app_logger.warning("Could not verify timestamp column types at startup.", exc_info=True)

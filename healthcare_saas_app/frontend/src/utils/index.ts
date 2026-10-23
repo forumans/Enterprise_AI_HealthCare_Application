@@ -122,3 +122,13 @@ export const OFFICE_HOUR_SLOTS: string[] = Array.from(
     return `${hour % 12 === 0 ? 12 : hour % 12}:00 ${hour < 12 ? 'AM' : 'PM'}`;
   }
 );
+
+/**
+ * Removes the calendar cell booked in this session for an appointment that was just cancelled.
+ * `booked` holds local calendar-cell strings ("2026-10-22T23:00:00") while the API returns UTC
+ * timestamps ("2026-10-23T03:00:00+00:00"), so instants are compared, not strings.
+ */
+export function removeCancelledBooking<T extends { slot_time: string }>(booked: T[], appointmentTime: string): T[] {
+  const cancelledAt = parseServerDate(appointmentTime).getTime();
+  return booked.filter(entry => new Date(entry.slot_time).getTime() !== cancelledAt);
+}

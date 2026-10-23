@@ -133,17 +133,24 @@ export function PatientAppointmentsPage({ auth, appointments, userData }: Patien
       return;
     }
 
+    // Capture the appointment before refreshing - the refreshed lists drop cancelled appointments,
+    // and patientAppointments may not include one booked moments ago.
+    const cancelledAppointment =
+      appointments.appointments.find((apt: AppointmentRow) => apt.id === appointmentId) ??
+      patientAppointments.find(apt => apt.id === appointmentId);
+
     setCancellingId(appointmentId);
     try {
       await api.cancelAppointment(auth.session.accessToken, appointmentId);
-      
+
       // Refresh appointments
       await appointments.loadPatientAppointments();
-      
-      // Remove the cancelled appointment from bookedAppointments state
-      const cancelledAppointment = patientAppointments.find(apt => apt.id === appointmentId);
-      if (cancelledAppointment) {
-        setBookedAppointments(prev => prev.filter(apt => apt.slot_time !== cancelledAppointment.appointment_time));
+
+      // Remove the cancelled appointment from bookedAppointments state. Entries there are local
+      // calendar-cell strings while the API returns UTC timestamps, so compare instants, not strings.
+      if (cancelledAppointment?.appointment_time) {
+        const cancelledAt = parseServerDate(cancelledAppointment.appointment_time).getTime();
+        setBookedAppointments(prev => prev.filter(apt => new Date(apt.slot_time).getTime() !== cancelledAt));
       }
       
       // Also refresh the local patientAppointments state

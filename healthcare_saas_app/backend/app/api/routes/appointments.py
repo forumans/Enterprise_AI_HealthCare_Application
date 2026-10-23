@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.dependencies import CurrentIdentity, get_current_identity, require_roles
 from ...core.database import get_db
-from ...core.timeutils import UTC, parse_client_datetime, utc_now, utc_today
+from ...core.timeutils import clinic_today, clinic_week_bounds, parse_client_datetime, utc_now
 from ...models import Appointment, Patient, Doctor, DoctorAvailability
 from ...services.appointment_service import book_appointment
 from ...services.audit_service import write_audit_log
@@ -30,10 +30,7 @@ class UpdateAppointmentStatusRequest(BaseModel):
 
 
 def _week_bounds(from_date: date | None) -> tuple[datetime, datetime]:
-    anchor = from_date or utc_today()
-    start = datetime.combine(anchor - timedelta(days=anchor.weekday()), time.min, tzinfo=UTC)
-    end = start + timedelta(days=7)
-    return start, end
+    return clinic_week_bounds(from_date or clinic_today())
 
 
 @router.post("/appointments", status_code=status.HTTP_201_CREATED)

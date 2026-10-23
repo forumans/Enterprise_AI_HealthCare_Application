@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.dependencies import CurrentIdentity, require_roles
 from ...core.database import get_db
-from ...core.timeutils import utc_now
+from ...core.timeutils import clinic_day_start, clinic_today, utc_now
 from ...models import Admin, Appointment, Doctor, MedicalRecord, Patient, User
 from ...services.audit_service import write_audit_log
 
@@ -20,17 +20,14 @@ router = APIRouter(prefix="/admin")
 
 
 def _appointment_window_starts(now: datetime) -> dict[str, datetime]:
-    """Return normalized UTC window starts used for dashboard metrics."""
+    """Return dashboard window starts: clinic-local midnights, as UTC instants."""
 
-    start_of_today = datetime.combine(now.date(), time.min, tzinfo=now.tzinfo)
-    start_of_week = start_of_today - timedelta(days=start_of_today.weekday())
-    start_of_month = start_of_today.replace(day=1)
-    start_of_year = start_of_today.replace(month=1, day=1)
+    today = clinic_today(now)
     return {
-        "today": start_of_today,
-        "week": start_of_week,
-        "month": start_of_month,
-        "year": start_of_year,
+        "today": clinic_day_start(today),
+        "week": clinic_day_start(today - timedelta(days=today.weekday())),
+        "month": clinic_day_start(today.replace(day=1)),
+        "year": clinic_day_start(today.replace(month=1, day=1)),
     }
 
 

@@ -16,6 +16,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer
+from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -120,15 +121,48 @@ def create_app() -> FastAPI:
                 "Skipping ORM metadata initialization on startup "
                 "(DB_SCHEMA_INIT_ON_STARTUP=false)."
             )
-            return
+        else:
+            try:
+                async with get_engine().begin() as conn:
+                    await conn.run_sync(Base.metadata.create_all)
+                app_logger.info("Database initialization completed successfully.")
+            except Exception:
+                app_logger.exception("Database initialization failed during startup.")
+                raise
+
+        await _require_timestamptz_columns()
+
+    async def _require_timestamptz_columns() -> None:
+        """Refuse to start against a database that hasn't had migration 003 applied.
+
+        This code binds timezone-aware datetimes. Against a `timestamp without time zone`
+        column, PostgreSQL silently converts them to the server's TimeZone, storing wrong
+        values (e.g. 8 AM New York saved as 08:00 and later read back as 08:00 UTC).
+        """
 
         try:
-            async with get_engine().begin() as conn:
-                await conn.run_sync(Base.metadata.create_all)
-            app_logger.info("Database initialization completed successfully.")
-        except Exception:
-            app_logger.exception("Database initialization failed during startup.")
-            raise
+            async with get_engine().connect() as conn:
+                naive_columns = (
+                    await conn.execute(
+                        text(
+                            "SELECT table_name || '.' || column_name FROM information_schema.columns "
+                            "WHERE table_schema = 'public' AND data_type = 'timestamp without time zone' "
+                            "ORDER BY 1"
+                        )
+                    )
+                ).scalars().all()
+        except SQLAlchemyError:
+            # Don't block startup when the DB is unreachable - the health endpoint reports that.
+            app_logger.warning("Could not verify timestamp column types at startup.", exc_info=True)
+            return
+
+        if naive_columns:
+            raise RuntimeError(
+                "Database schema is out of date: these columns are still 'timestamp without time zone': "
+                + ", ".join(naive_columns)
+                + ". Apply backend/migrations/003_convert_timestamps_to_timestamptz.sql (as the table "
+                "owner) before starting this version of the backend."
+            )
 
     # Expose business APIs under /api for CloudFront single-behavior proxying.
     app.include_router(api_router, prefix="/api")

@@ -62,6 +62,37 @@ def utc_today() -> date:
     return utc_now().date()
 
 
+def clinic_today(now: datetime | None = None) -> date:
+    """Today's calendar date in the clinic's timezone."""
+
+    return (to_utc(now) if now is not None else utc_now()).astimezone(CLINIC_TZ).date()
+
+
+def clinic_date(value: datetime) -> date:
+    """The clinic-local calendar date of an instant."""
+
+    return to_utc(value).astimezone(CLINIC_TZ).date()
+
+
+def clinic_day_start(day: date) -> datetime:
+    """The UTC instant of local midnight at the start of `day` in the clinic's timezone."""
+
+    return datetime(day.year, day.month, day.day, tzinfo=CLINIC_TZ).astimezone(UTC)
+
+
+def clinic_day_bounds(day: date) -> tuple[datetime, datetime]:
+    """[start, end) UTC range covering clinic-local `day` (23 or 25 hours on DST change days)."""
+
+    return clinic_day_start(day), clinic_day_start(day + timedelta(days=1))
+
+
+def clinic_week_bounds(anchor: date) -> tuple[datetime, datetime]:
+    """[start, end) UTC range of the clinic-local Monday-to-Sunday week containing `anchor`."""
+
+    monday = anchor - timedelta(days=anchor.weekday())
+    return clinic_day_start(monday), clinic_day_start(monday + timedelta(days=7))
+
+
 def default_slot_times(now: datetime | None = None, days: int = DEFAULT_SLOT_DAYS) -> list[datetime]:
     """Hourly office-hour slots in clinic local time for the next `days` days, as aware UTC.
 

@@ -2,9 +2,16 @@ import unittest
 from datetime import UTC, date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from backend.app.api.routes.admin import _appointment_window_starts
 from backend.app.core import timeutils
-from backend.app.core.timeutils import default_slot_times, parse_client_datetime, to_utc, utc_day_start
+from backend.app.core.timeutils import (
+    clinic_day_bounds,
+    clinic_today,
+    clinic_week_bounds,
+    default_slot_times,
+    parse_client_datetime,
+    to_utc,
+    utc_day_start,
+)
 
 NEW_YORK = ZoneInfo("America/New_York")
 
@@ -73,10 +80,38 @@ class ConversionHelperTests(unittest.TestCase):
     def test_utc_day_start(self):
         self.assertEqual(utc_day_start(date(2026, 3, 8)), datetime(2026, 3, 8, tzinfo=UTC))
 
-    def test_admin_windows_keep_utc_tzinfo(self):
-        windows = _appointment_window_starts(datetime(2026, 3, 22, 18, 45, 30, tzinfo=UTC))
-        self.assertEqual(windows["today"], datetime(2026, 3, 22, tzinfo=UTC))
-        self.assertEqual(windows["week"], datetime(2026, 3, 16, tzinfo=UTC))
+
+
+class ClinicCalendarTests(unittest.TestCase):
+    def setUp(self):
+        self._orig_tz = timeutils.CLINIC_TZ
+        timeutils.CLINIC_TZ = NEW_YORK
+
+    def tearDown(self):
+        timeutils.CLINIC_TZ = self._orig_tz
+
+    def test_clinic_today_uses_local_date_late_in_the_evening(self):
+        # 11 PM EDT Oct 22 = 03:00 UTC Oct 23.
+        self.assertEqual(clinic_today(datetime(2026, 10, 23, 3, 0, tzinfo=UTC)), date(2026, 10, 22))
+
+    def test_day_bounds_cover_evening_appointments(self):
+        start, end = clinic_day_bounds(date(2026, 10, 22))
+        self.assertEqual(start, datetime(2026, 10, 22, 4, tzinfo=UTC))
+        self.assertEqual(end, datetime(2026, 10, 23, 4, tzinfo=UTC))
+        eleven_pm = datetime(2026, 10, 23, 3, 0, tzinfo=UTC)
+        self.assertTrue(start <= eleven_pm < end)
+
+    def test_day_bounds_on_dst_change_days(self):
+        fall_start, fall_end = clinic_day_bounds(date(2026, 11, 1))
+        spring_start, spring_end = clinic_day_bounds(date(2026, 3, 8))
+        self.assertEqual(fall_end - fall_start, timedelta(hours=25))
+        self.assertEqual(spring_end - spring_start, timedelta(hours=23))
+
+    def test_week_bounds_monday_to_monday_local(self):
+        start, end = clinic_week_bounds(date(2026, 11, 4))  # Wednesday, week spans DST end
+        self.assertEqual(start, datetime(2026, 11, 2, 5, tzinfo=UTC))  # Mon Nov 2, midnight EST
+        self.assertEqual(end, datetime(2026, 11, 9, 5, tzinfo=UTC))
+        self.assertEqual(clinic_week_bounds(date(2026, 10, 26))[1], datetime(2026, 11, 2, 5, tzinfo=UTC))
 
 
 if __name__ == "__main__":

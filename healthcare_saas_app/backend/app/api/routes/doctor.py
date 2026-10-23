@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -15,7 +15,8 @@ from ...core.dependencies import CurrentIdentity, get_current_identity, require_
 from ...core.database import get_db
 from ...models import Appointment, Doctor, DoctorAvailability, MedicalRecord, Patient, Prescription, User, Tenant
 from ...core.security import hash_password
-from ...core.timeutils import UTC, default_slot_times, parse_client_datetime, utc_now, utc_today
+from ...core.timeutils import clinic_day_bounds, clinic_today, clinic_week_bounds, parse_client_datetime, utc_now
+from ...services.availability_service import ensure_default_slots
 from ...services.audit_service import write_audit_log
 
 router = APIRouter()
@@ -239,8 +240,7 @@ async def list_availability(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid date format.") from exc
 
-    day_start = datetime.combine(day, time.min, tzinfo=UTC)
-    day_end = datetime.combine(day, time.max, tzinfo=UTC)
+    day_start, day_end = clinic_day_bounds(day)
 
     stmt = (
         select(DoctorAvailability)
@@ -249,7 +249,7 @@ async def list_availability(
                 DoctorAvailability.tenant_id == identity.tenant_id,
                 DoctorAvailability.doctor_id == doctor_id,
                 DoctorAvailability.slot_time >= day_start,
-                DoctorAvailability.slot_time <= day_end,
+                DoctorAvailability.slot_time < day_end,
                 DoctorAvailability.status == "AVAILABLE",
                 DoctorAvailability.deleted_at.is_(None),
             )
@@ -268,6 +268,20 @@ async def list_availability_next_30_days(
     now = utc_now()
     end_date = now + timedelta(days=30)
 
+    doctor = (
+        await db.execute(
+            select(Doctor).where(
+                and_(
+                    Doctor.id == doctor_id,
+                    Doctor.deleted_at.is_(None),
+                )
+            )
+        )
+    ).scalar_one_or_none()
+    if doctor:
+        # Top up default office-hour slots (8 AM–11 PM clinic local time) for the next 7 days.
+        await ensure_default_slots(db, doctor, now=now)
+
     stmt = (
         select(DoctorAvailability.slot_time)
         .select_from(DoctorAvailability)
@@ -285,46 +299,8 @@ async def list_availability_next_30_days(
         .order_by(DoctorAvailability.slot_time.asc())
     )
     rows = (await db.execute(stmt)).scalars().all()
-    
-    # If no availability exists, create some default slots for testing
-    if not rows:
-        # Get the doctor to ensure we have the correct tenant_id
-        doctor = (
-            await db.execute(
-                select(Doctor).where(
-                    and_(
-                        Doctor.id == doctor_id,
-                        Doctor.deleted_at.is_(None),
-                    )
-                )
-            )
-        ).scalar_one_or_none()
-        
-        if doctor:
-            # Generate default office-hour slots (8 AM–11 PM clinic local time) for the next 7 days.
-            default_slots = []
-            try:
-                for slot_time in default_slot_times(now):
-                    availability = DoctorAvailability(
-                        tenant_id=doctor.tenant_id,
-                        doctor_id=doctor_id,
-                        slot_time=slot_time,
-                        status="AVAILABLE"
-                    )
-                    db.add(availability)
-                    default_slots.append({"slot_time": slot_time.isoformat()})
-
-                # Commit the default slots
-                await db.commit()
-            except Exception as e:
-                await db.rollback()
-                return []
-
-            return default_slots
-
     return [{"slot_time": row.isoformat()} for row in rows]
 
-            # ... (rest of the code remains the same)
 
 @router.get("/doctor/availability/{doctor_id}/all")
 async def list_all_availability(
@@ -353,7 +329,10 @@ async def list_all_availability(
     if not doctor:
         # Doctor doesn't exist, return empty array
         return []
-    
+
+    # Top up default office-hour slots (8 AM–11 PM clinic local time) for the next 7 days.
+    await ensure_default_slots(db, doctor, now=now)
+
     # Get all availability slots
     stmt = (
         select(DoctorAvailability)
@@ -368,31 +347,6 @@ async def list_all_availability(
         .order_by(DoctorAvailability.slot_time.asc())
     )
     availability_rows = (await db.execute(stmt)).scalars().all()
-    
-    # If no availability exists, generate default office-hour slots
-    # (8 AM–11 PM clinic local time) for the next 7 days.
-    if not availability_rows:
-        default_slots = []
-        try:
-            for slot_time in default_slot_times(now):
-                availability = DoctorAvailability(
-                    tenant_id=doctor.tenant_id,
-                    doctor_id=doctor.id,
-                    slot_time=slot_time,
-                    status="AVAILABLE"
-                )
-                db.add(availability)
-                default_slots.append({
-                    "slot_time": slot_time.isoformat(),
-                    "status": "AVAILABLE"
-                })
-            
-            # Commit the default slots
-            await db.commit()
-            return default_slots
-        except Exception as e:
-            await db.rollback()
-            return []
 
     # Get active appointments for these slots (only non-cancelled ones)
     slot_times = [row.slot_time for row in availability_rows]
@@ -533,9 +487,7 @@ async def doctor_appointments_today(
     identity: CurrentIdentity = Depends(require_roles("DOCTOR")),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    today = utc_today()
-    start = datetime.combine(today, time.min, tzinfo=UTC)
-    end = datetime.combine(today, time.max, tzinfo=UTC)
+    start, end = clinic_day_bounds(clinic_today())
 
     doctor = (
         await db.execute(
@@ -557,7 +509,7 @@ async def doctor_appointments_today(
                 Appointment.tenant_id == identity.tenant_id,
                 Appointment.doctor_id == doctor.id,
                 Appointment.appointment_time >= start,
-                Appointment.appointment_time <= end,
+                Appointment.appointment_time < end,
                 Appointment.deleted_at.is_(None),
                 Patient.deleted_at.is_(None),
             )
@@ -586,7 +538,7 @@ async def doctor_all_appointments(
     """Get all appointments for a given week without date restrictions."""
     print(f"DEBUG: doctor_all_appointments called - user_id: {identity.user_id}")
     
-    anchor = from_date or utc_today()
+    anchor = from_date or clinic_today()
     
     doctor = (
         await db.execute(
@@ -603,8 +555,7 @@ async def doctor_all_appointments(
         print("DEBUG: No doctor found, returning empty list")
         return []
 
-    week_start = datetime.combine(anchor - timedelta(days=anchor.weekday()), time.min, tzinfo=UTC)
-    week_end = week_start + timedelta(days=7)
+    week_start, week_end = clinic_week_bounds(anchor)
     
     stmt = (
         select(Appointment, Patient)
@@ -698,9 +649,7 @@ async def doctor_appointments_today(
     identity: CurrentIdentity = Depends(require_roles("DOCTOR")),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    today = utc_today()
-    start = datetime.combine(today, time.min, tzinfo=UTC)
-    end = datetime.combine(today, time.max, tzinfo=UTC)
+    start, end = clinic_day_bounds(clinic_today())
 
     doctor = (
         await db.execute(
@@ -722,7 +671,7 @@ async def doctor_appointments_today(
                 Appointment.tenant_id == identity.tenant_id,
                 Appointment.doctor_id == doctor.id,
                 Appointment.appointment_time >= start,
-                Appointment.appointment_time <= end,
+                Appointment.appointment_time < end,
                 Appointment.deleted_at.is_(None),
                 Patient.deleted_at.is_(None),
             )
@@ -751,7 +700,7 @@ async def doctor_all_appointments(
     """Get all appointments for a given week without date restrictions."""
     print(f"DEBUG: doctor_all_appointments called - user_id: {identity.user_id}")
     
-    anchor = from_date or utc_today()
+    anchor = from_date or clinic_today()
     
     doctor = (
         await db.execute(
@@ -768,8 +717,7 @@ async def doctor_all_appointments(
         print("DEBUG: No doctor found, returning empty list")
         return []
 
-    week_start = datetime.combine(anchor - timedelta(days=anchor.weekday()), time.min, tzinfo=UTC)
-    week_end = week_start + timedelta(days=7)
+    week_start, week_end = clinic_week_bounds(anchor)
     
     stmt = (
         select(Appointment, Patient)
@@ -811,8 +759,8 @@ async def doctor_weekly_appointments(
     identity: CurrentIdentity = Depends(require_roles("DOCTOR")),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    anchor = from_date or utc_today()
-    today = utc_today()
+    anchor = from_date or clinic_today()
+    today = clinic_today()
     if anchor < today:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot request appointments earlier than today.")
     if anchor > today + timedelta(days=30):
@@ -830,8 +778,7 @@ async def doctor_weekly_appointments(
     if doctor is None:
         return []
 
-    week_start = datetime.combine(anchor - timedelta(days=anchor.weekday()), time.min, tzinfo=UTC)
-    week_end = week_start + timedelta(days=7)
+    week_start, week_end = clinic_week_bounds(anchor)
     stmt = (
         select(Appointment, Patient)
         .join(Patient, Patient.id == Appointment.patient_id)
@@ -997,14 +944,9 @@ async def search_patients(
     identity: CurrentIdentity = Depends(require_roles("DOCTOR")),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    # Write to debug file
-    with open("debug_patients.log", "a") as f:
-        f.write(f"DEBUG - search_patients called with query: '{q}'\n")
     
     query = q.strip()
     if len(query) < 2:
-        with open("debug_patients.log", "a") as f:
-            f.write("DEBUG - Query too short, returning empty\n")
         return []
 
     # Get patients matching the search
@@ -1017,11 +959,6 @@ async def search_patients(
     
     results = []
     for patient in patients:
-        # Debug: Log raw patient data
-        with open("debug_patients.log", "a") as f:
-            f.write(f"DEBUG - Raw patient data from DB: {patient.full_name}\n")
-            f.write(f"  - date_of_birth: {patient.date_of_birth} (type: {type(patient.date_of_birth)})\n")
-            f.write(f"  - gender: {patient.gender} (type: {type(patient.gender)})\n")
         
         # Get the most recent appointment for this patient (optional)
         appointment_stmt = select(Appointment).where(
@@ -1072,14 +1009,10 @@ async def search_patients(
         dob_value = ""
         if patient.date_of_birth:
             dob_value = patient.date_of_birth.isoformat()
-            with open("debug_patients.log", "a") as f:
-                f.write(f"DEBUG - Converted DOB to: {dob_value}\n")
         
         gender_value = ""
         if patient.gender:
             gender_value = str(patient.gender)
-            with open("debug_patients.log", "a") as f:
-                f.write(f"DEBUG - Converted Gender to: {gender_value}\n")
         
         # Always return patient data, even if no appointments
         result = {
@@ -1097,8 +1030,6 @@ async def search_patients(
         }
         
         # Debug log
-        with open("debug_patients.log", "a") as f:
-            f.write(f"DEBUG - Backend returning patient {patient.full_name}: DOB='{result['dob']}', Gender='{result['gender']}'\n")
         
         results.append(result)
     

@@ -5,7 +5,6 @@ Includes `/users/{id}/soft-delete` and `/users/{id}/restore` used by UI logic.
 
 from __future__ import annotations
 
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -15,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.dependencies import CurrentIdentity, get_current_identity, require_roles
 from ...core.database import get_db
+from ...core.timeutils import utc_now
 from ...core.security import hash_password
 from ...models import Doctor, Patient, User
 from ...services.audit_service import write_audit_log
@@ -137,7 +137,7 @@ async def soft_delete_user(
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
 
-    user.deleted_at = datetime.utcnow()
+    user.deleted_at = utc_now()
     user.deleted_by = identity.user_id
 
     await write_audit_log(

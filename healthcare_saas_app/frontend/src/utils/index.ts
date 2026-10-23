@@ -106,3 +106,19 @@ export function parseErrorMessage(error: unknown): string {
 export function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
+
+/**
+ * First and last hourly office slots in clinic local time (24-hour clock): 8 AM through the 11 PM slot.
+ * Keep in sync with WORKDAY_FIRST_SLOT_HOUR / WORKDAY_LAST_SLOT_HOUR in backend/app/core/timeutils.py.
+ */
+export const WORKDAY_FIRST_SLOT_HOUR = 8;
+export const WORKDAY_LAST_SLOT_HOUR = 23;
+
+/** Hourly slot labels ("8:00 AM" ... "11:00 PM") for the availability and booking grids. */
+export const OFFICE_HOUR_SLOTS: string[] = Array.from(
+  { length: WORKDAY_LAST_SLOT_HOUR - WORKDAY_FIRST_SLOT_HOUR + 1 },
+  (_, i) => {
+    const hour = WORKDAY_FIRST_SLOT_HOUR + i;
+    return `${hour % 12 === 0 ? 12 : hour % 12}:00 ${hour < 12 ? 'AM' : 'PM'}`;
+  }
+);

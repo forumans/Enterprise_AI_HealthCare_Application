@@ -2,14 +2,8 @@
 
 from __future__ import annotations
 
-import os
 import sys
-from datetime import date, datetime, time, timedelta, timezone
-from zoneinfo import ZoneInfo
-
-# Clinic's local timezone — used to convert office-hour slots to UTC for storage.
-# Override with the CLINIC_TIMEZONE environment variable if the clinic is not in US Eastern.
-_CLINIC_TZ = ZoneInfo(os.environ.get("CLINIC_TIMEZONE", "America/New_York"))
+from datetime import date, datetime, time, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -21,6 +15,7 @@ from ...core.dependencies import CurrentIdentity, get_current_identity, require_
 from ...core.database import get_db
 from ...models import Appointment, Doctor, DoctorAvailability, MedicalRecord, Patient, Prescription, User, Tenant
 from ...core.security import hash_password
+from ...core.timeutils import UTC, default_slot_times, parse_client_datetime, utc_now, utc_today
 from ...services.audit_service import write_audit_log
 
 router = APIRouter()
@@ -244,8 +239,8 @@ async def list_availability(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid date format.") from exc
 
-    day_start = datetime.combine(day, time.min)
-    day_end = datetime.combine(day, time.max)
+    day_start = datetime.combine(day, time.min, tzinfo=UTC)
+    day_end = datetime.combine(day, time.max, tzinfo=UTC)
 
     stmt = (
         select(DoctorAvailability)
@@ -270,7 +265,7 @@ async def list_availability_next_30_days(
     doctor_id: str,
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = utc_now()
     end_date = now + timedelta(days=30)
 
     stmt = (
@@ -306,27 +301,19 @@ async def list_availability_next_30_days(
         ).scalar_one_or_none()
         
         if doctor:
-            # Generate default slots for the next 7 days (8 AM–4 PM clinic local time)
-            # and store them as naive-UTC datetimes, consistent with all other slot_time values.
-            local_now = datetime.now(_CLINIC_TZ)
+            # Generate default office-hour slots (8 AM–11 PM clinic local time) for the next 7 days.
             default_slots = []
             try:
-                for days_ahead in range(7):
-                    local_date = (local_now + timedelta(days=days_ahead)).date()
-                    for hour in range(8, 17):  # 8 AM to 4 PM clinic local time
-                        local_slot = datetime(local_date.year, local_date.month, local_date.day,
-                                             hour, 0, 0, tzinfo=_CLINIC_TZ)
-                        slot_time = local_slot.astimezone(timezone.utc).replace(tzinfo=None)
-                        if slot_time > now:
-                            availability = DoctorAvailability(
-                                tenant_id=doctor.tenant_id,
-                                doctor_id=doctor_id,
-                                slot_time=slot_time,
-                                status="AVAILABLE"
-                            )
-                            db.add(availability)
-                            default_slots.append({"slot_time": slot_time.isoformat()})
-                
+                for slot_time in default_slot_times(now):
+                    availability = DoctorAvailability(
+                        tenant_id=doctor.tenant_id,
+                        doctor_id=doctor_id,
+                        slot_time=slot_time,
+                        status="AVAILABLE"
+                    )
+                    db.add(availability)
+                    default_slots.append({"slot_time": slot_time.isoformat()})
+
                 # Commit the default slots
                 await db.commit()
             except Exception as e:
@@ -347,7 +334,7 @@ async def list_all_availability(
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     """Get all availability (both available and booked) for a doctor."""
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = utc_now()
     end_date = now + timedelta(days=days)
 
     # First check if doctor exists
@@ -382,30 +369,23 @@ async def list_all_availability(
     )
     availability_rows = (await db.execute(stmt)).scalars().all()
     
-    # If no availability exists, generate default slots for the next 7 days
-    # (8 AM–4 PM clinic local time) stored as naive-UTC datetimes.
+    # If no availability exists, generate default office-hour slots
+    # (8 AM–11 PM clinic local time) for the next 7 days.
     if not availability_rows:
-        local_now = datetime.now(_CLINIC_TZ)
         default_slots = []
         try:
-            for days_ahead in range(7):
-                local_date = (local_now + timedelta(days=days_ahead)).date()
-                for hour in range(8, 17):  # 8 AM to 4 PM clinic local time
-                    local_slot = datetime(local_date.year, local_date.month, local_date.day,
-                                         hour, 0, 0, tzinfo=_CLINIC_TZ)
-                    slot_time = local_slot.astimezone(timezone.utc).replace(tzinfo=None)
-                    if slot_time > now:
-                        availability = DoctorAvailability(
-                            tenant_id=doctor.tenant_id,
-                            doctor_id=doctor.id,
-                            slot_time=slot_time,
-                            status="AVAILABLE"
-                        )
-                        db.add(availability)
-                        default_slots.append({
-                            "slot_time": slot_time.isoformat(),
-                            "status": "AVAILABLE"
-                        })
+            for slot_time in default_slot_times(now):
+                availability = DoctorAvailability(
+                    tenant_id=doctor.tenant_id,
+                    doctor_id=doctor.id,
+                    slot_time=slot_time,
+                    status="AVAILABLE"
+                )
+                db.add(availability)
+                default_slots.append({
+                    "slot_time": slot_time.isoformat(),
+                    "status": "AVAILABLE"
+                })
             
             # Commit the default slots
             await db.commit()
@@ -464,7 +444,7 @@ async def upsert_availability(
 ) -> dict:
     """Add or update availability for a doctor."""
     try:
-        slot_time = datetime.fromisoformat(payload.slot_time)
+        slot_time = parse_client_datetime(payload.slot_time)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid datetime format.") from exc
 
@@ -525,7 +505,7 @@ async def delete_availability(
 ) -> dict:
     """Delete availability for a doctor."""
     try:
-        slot_time = datetime.fromisoformat(payload.slot_time)
+        slot_time = parse_client_datetime(payload.slot_time)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid datetime format.") from exc
 
@@ -553,9 +533,9 @@ async def doctor_appointments_today(
     identity: CurrentIdentity = Depends(require_roles("DOCTOR")),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    today = date.today()
-    start = datetime.combine(today, time.min)
-    end = datetime.combine(today, time.max)
+    today = utc_today()
+    start = datetime.combine(today, time.min, tzinfo=UTC)
+    end = datetime.combine(today, time.max, tzinfo=UTC)
 
     doctor = (
         await db.execute(
@@ -606,7 +586,7 @@ async def doctor_all_appointments(
     """Get all appointments for a given week without date restrictions."""
     print(f"DEBUG: doctor_all_appointments called - user_id: {identity.user_id}")
     
-    anchor = from_date or date.today()
+    anchor = from_date or utc_today()
     
     doctor = (
         await db.execute(
@@ -623,7 +603,7 @@ async def doctor_all_appointments(
         print("DEBUG: No doctor found, returning empty list")
         return []
 
-    week_start = datetime.combine(anchor - timedelta(days=anchor.weekday()), time.min)
+    week_start = datetime.combine(anchor - timedelta(days=anchor.weekday()), time.min, tzinfo=UTC)
     week_end = week_start + timedelta(days=7)
     
     stmt = (
@@ -718,9 +698,9 @@ async def doctor_appointments_today(
     identity: CurrentIdentity = Depends(require_roles("DOCTOR")),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    today = date.today()
-    start = datetime.combine(today, time.min)
-    end = datetime.combine(today, time.max)
+    today = utc_today()
+    start = datetime.combine(today, time.min, tzinfo=UTC)
+    end = datetime.combine(today, time.max, tzinfo=UTC)
 
     doctor = (
         await db.execute(
@@ -771,7 +751,7 @@ async def doctor_all_appointments(
     """Get all appointments for a given week without date restrictions."""
     print(f"DEBUG: doctor_all_appointments called - user_id: {identity.user_id}")
     
-    anchor = from_date or date.today()
+    anchor = from_date or utc_today()
     
     doctor = (
         await db.execute(
@@ -788,7 +768,7 @@ async def doctor_all_appointments(
         print("DEBUG: No doctor found, returning empty list")
         return []
 
-    week_start = datetime.combine(anchor - timedelta(days=anchor.weekday()), time.min)
+    week_start = datetime.combine(anchor - timedelta(days=anchor.weekday()), time.min, tzinfo=UTC)
     week_end = week_start + timedelta(days=7)
     
     stmt = (
@@ -831,8 +811,8 @@ async def doctor_weekly_appointments(
     identity: CurrentIdentity = Depends(require_roles("DOCTOR")),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    anchor = from_date or date.today()
-    today = date.today()
+    anchor = from_date or utc_today()
+    today = utc_today()
     if anchor < today:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot request appointments earlier than today.")
     if anchor > today + timedelta(days=30):
@@ -850,7 +830,7 @@ async def doctor_weekly_appointments(
     if doctor is None:
         return []
 
-    week_start = datetime.combine(anchor - timedelta(days=anchor.weekday()), time.min)
+    week_start = datetime.combine(anchor - timedelta(days=anchor.weekday()), time.min, tzinfo=UTC)
     week_end = week_start + timedelta(days=7)
     stmt = (
         select(Appointment, Patient)
@@ -900,14 +880,11 @@ async def upsert_doctor_availability(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Doctor profile not found.")
 
     try:
-        slot_time = datetime.fromisoformat(payload.slot.replace('Z', '+00:00'))
-        # Normalise to UTC-naive for storage and comparison
-        if slot_time.tzinfo is not None:
-            slot_time = slot_time.astimezone(timezone.utc).replace(tzinfo=None)
+        slot_time = parse_client_datetime(payload.slot)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid slot timestamp.") from exc
 
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = utc_now()
 
     if slot_time < now:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot update slots earlier than now.")
@@ -994,7 +971,7 @@ async def doctor_appointments_upcoming(
             and_(
                 Appointment.tenant_id == identity.tenant_id,
                 Appointment.doctor_id == doctor.id,
-                Appointment.appointment_time >= datetime.utcnow(),
+                Appointment.appointment_time >= utc_now(),
                 Appointment.deleted_at.is_(None),
                 Patient.deleted_at.is_(None),
             )

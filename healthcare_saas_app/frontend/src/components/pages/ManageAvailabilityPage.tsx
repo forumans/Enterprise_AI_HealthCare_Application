@@ -7,7 +7,7 @@
 import React, { useState, useEffect } from "react";
 import { api } from "../../api";
 import { useAuthContext } from "../../contexts/AuthContext";
-import { parseErrorMessage, parseServerDate } from "../../utils";
+import { OFFICE_HOUR_SLOTS, parseErrorMessage, parseServerDate } from "../../utils";
 import type { SessionState } from "../../types/app";
 
 interface ManageAvailabilityPageProps {
@@ -133,9 +133,7 @@ export function ManageAvailabilityPage({ auth }: ManageAvailabilityPageProps) {
     });
   }
 
-  const timeSlots = [
-    "8:00 AM", "9:00 AM", "10:00 AM", "11:00 AM", "12:00 PM", "1:00 PM", "2:00 PM", "3:00 PM", "4:00 PM"
-  ];
+  const timeSlots = OFFICE_HOUR_SLOTS;
 
   async function toggleSlot(date: number, month: number, year: number, timeSlot: string) {
     // Convert to 24-hour format

@@ -6,7 +6,6 @@ UI currently uploads via `/patient/documents`; this route adds generic
 
 from __future__ import annotations
 
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy import and_, select
@@ -14,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.dependencies import CurrentIdentity, get_current_identity, require_roles
 from ...core.database import get_db
+from ...core.timeutils import utc_now
 from ...core.storage import generate_presigned_url, upload_document
 from ...models import Patient, PatientDocument
 from ...services.audit_service import write_audit_log
@@ -42,7 +42,7 @@ async def create_document(
     if patient is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found.")
 
-    timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    timestamp = utc_now().strftime("%Y%m%d%H%M%S")
     safe_name = (file.filename or "document.bin").replace("/", "_").replace("\\", "_")
     s3_key = f"documents/{identity.tenant_id}/{patient_id}/{timestamp}_{safe_name}"
 

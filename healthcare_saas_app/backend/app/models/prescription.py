@@ -20,4 +20,4 @@ class Prescription(Base, SoftDeleteMixin):
     medical_record_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("medical_records.id", ondelete="CASCADE"), nullable=False, unique=True)
     pharmacy_id: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), ForeignKey("pharmacies.id", ondelete="SET NULL"))
     medication_details: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=text("CURRENT_TIMESTAMP"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"), nullable=False)

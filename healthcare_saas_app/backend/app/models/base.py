@@ -16,5 +16,5 @@ class Base(DeclarativeBase):
 class SoftDeleteMixin:
     """Mixin matching database soft-delete columns from SQL script."""
 
-    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     deleted_by: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id"), nullable=True)

@@ -189,6 +189,19 @@ Defaults in `template.yaml`:
 psql -h your-rds-endpoint -U healthcare_user -d healthcare_db -f migrations/001_initial_schema.sql
 ```
 
+### Migrations 003/004: TIMESTAMPTZ columns and 8 AM–11 PM slots
+
+`003_convert_timestamps_to_timestamptz.sql` converts every timestamp column to `timestamptz`, and the backend code that ships with it binds timezone-aware datetimes (`app/core/timeutils.py`). **The migration and that backend code must go live together**: old code against migrated columns (or new code against unmigrated ones) misreads or rejects timestamps. Procedure:
+
+1. Take an RDS snapshot.
+2. Check `SHOW timezone;` on the instance — `CURRENT_TIMESTAMP`-default columns (`created_at`, `audit_logs.performed_at`) are interpreted in this zone, all other columns as UTC. If the DB zone ever differed from the current setting, override with `PGOPTIONS="-c migration.db_default_zone=<zone>"`.
+3. Run as the **table owner** (ALTER TABLE requires ownership): `psql -v ON_ERROR_STOP=1 -f migrations/003_convert_timestamps_to_timestamptz.sql`. It backs up every value into schema `tz_migration_backup`, verifies every row round-trips exactly, and rolls back entirely on any mismatch.
+4. Deploy the matching backend and frontend.
+5. Run `migrations/004_backfill_evening_availability_slots.sql` to add 5 PM–11 PM slots for doctors who already have upcoming 8 AM–4 PM slots (idempotent).
+6. Once the app is verified, `DROP SCHEMA tz_migration_backup CASCADE;`. Until then, `003_convert_timestamps_to_timestamptz_rollback.sql` reverts the column types (deploy the previous backend with it).
+
+RDS is in a private subnet, so `psql` needs a path into the VPC (SSM port-forward through a bastion, or a temporary bastion host) — it cannot be reached directly from a dev machine.
+
 ---
 
 ## IAM Permissions Required for Deployment

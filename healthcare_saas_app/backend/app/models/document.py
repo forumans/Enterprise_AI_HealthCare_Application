@@ -21,5 +21,5 @@ class PatientDocument(Base, SoftDeleteMixin):
     document_name: Mapped[Optional[str]] = mapped_column(String(255))
     document_type: Mapped[Optional[str]] = mapped_column(String(100))
     file_path: Mapped[Optional[str]] = mapped_column(Text)
-    signed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=text("CURRENT_TIMESTAMP"), nullable=False)
+    signed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"), nullable=False)

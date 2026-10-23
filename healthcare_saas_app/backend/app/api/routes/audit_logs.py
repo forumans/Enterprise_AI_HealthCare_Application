@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import and_, select
@@ -10,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.dependencies import CurrentIdentity, get_current_identity, require_roles
 from ...core.database import get_db
+from ...core.timeutils import parse_client_datetime
 from ...models import AuditLog
 
 router = APIRouter()
@@ -28,9 +28,9 @@ async def list_audit_logs(
     if table.strip():
         conditions.append(AuditLog.table_name == table.strip())
     if date_from.strip():
-        conditions.append(AuditLog.performed_at >= datetime.fromisoformat(date_from))
+        conditions.append(AuditLog.performed_at >= parse_client_datetime(date_from))
     if date_to.strip():
-        conditions.append(AuditLog.performed_at <= datetime.fromisoformat(date_to))
+        conditions.append(AuditLog.performed_at <= parse_client_datetime(date_to))
 
     stmt = select(AuditLog).where(and_(*conditions)).order_by(AuditLog.performed_at.desc()).limit(200)
     rows = (await db.execute(stmt)).scalars().all()

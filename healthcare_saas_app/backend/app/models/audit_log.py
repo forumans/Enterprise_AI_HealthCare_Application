@@ -23,4 +23,4 @@ class AuditLog(Base):
     old_data: Mapped[Optional[dict[str, Any]]] = mapped_column(JSONB)
     new_data: Mapped[Optional[dict[str, Any]]] = mapped_column(JSONB)
     performed_by: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), ForeignKey("users.id"), nullable=True)
-    performed_at: Mapped[datetime] = mapped_column(DateTime, server_default=text("CURRENT_TIMESTAMP"), nullable=False)
+    performed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"), nullable=False)

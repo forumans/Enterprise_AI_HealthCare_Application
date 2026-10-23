@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.dependencies import CurrentIdentity, get_current_identity, require_roles
 from ...core.database import get_db
+from ...core.timeutils import UTC, parse_client_datetime, utc_now, utc_today
 from ...models import Appointment, Patient, Doctor, DoctorAvailability
 from ...services.appointment_service import book_appointment
 from ...services.audit_service import write_audit_log
@@ -29,8 +30,8 @@ class UpdateAppointmentStatusRequest(BaseModel):
 
 
 def _week_bounds(from_date: date | None) -> tuple[datetime, datetime]:
-    anchor = from_date or date.today()
-    start = datetime.combine(anchor - timedelta(days=anchor.weekday()), time.min)
+    anchor = from_date or utc_today()
+    start = datetime.combine(anchor - timedelta(days=anchor.weekday()), time.min, tzinfo=UTC)
     end = start + timedelta(days=7)
     return start, end
 
@@ -53,9 +54,7 @@ async def create_appointment(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Patient profile not found.")
 
     try:
-        appointment_time = datetime.fromisoformat(payload.slot.replace('Z', '+00:00'))
-        if appointment_time.tzinfo is not None:
-            appointment_time = appointment_time.astimezone(timezone.utc).replace(tzinfo=None)
+        appointment_time = parse_client_datetime(payload.slot)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid slot timestamp.") from exc
 
@@ -287,7 +286,7 @@ async def delete_appointment(
         if patient is None or row.patient_id != patient.id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to cancel this appointment.")
 
-    row.deleted_at = datetime.utcnow()
+    row.deleted_at = utc_now()
     row.deleted_by = identity.user_id
     row.status = "CANCELLED"
 

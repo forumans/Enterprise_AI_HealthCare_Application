@@ -7,7 +7,7 @@
 
 import React, { useState, useEffect } from "react";
 import { api } from "../../api";
-import { parseServerDate } from "../../utils";
+import { OFFICE_HOUR_SLOTS, parseServerDate } from "../../utils";
 import type { SessionState, AppointmentRow } from "../../types/app";
 
 interface PatientAppointmentsPageProps {
@@ -195,7 +195,7 @@ export function PatientAppointmentsPage({ auth, appointments, userData }: Patien
 
   const handlePrevWeek = () => setWeekOffset(o => Math.max(0, o - 1));
   const handleNextWeek = () => setWeekOffset(o => Math.min(4, o + 1));
-  const timeSlots = ["8:00 AM", "9:00 AM", "10:00 AM", "11:00 AM", "12:00 PM", "1:00 PM", "2:00 PM", "3:00 PM", "4:00 PM"];
+  const timeSlots = OFFICE_HOUR_SLOTS;
   const currentHour = today.getHours();
 
   const handleBookAppointment = async (isoString: string) => {

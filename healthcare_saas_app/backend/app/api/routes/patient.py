@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.dependencies import CurrentIdentity, get_current_identity, require_roles
 from ...core.database import get_db
+from ...core.timeutils import utc_now
 from ...core.storage import upload_document
 from ...models import Appointment, Doctor, MedicalRecord, Patient, PatientDocument, Pharmacy, Prescription, User
 from ...services.audit_service import write_audit_log
@@ -311,7 +312,7 @@ async def upload_patient_document(
 ) -> dict:
     patient = await _current_patient(identity, db)
 
-    timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    timestamp = utc_now().strftime("%Y%m%d%H%M%S")
     safe_name = (file.filename or "document.bin").replace("/", "_").replace("\\", "_")
     s3_key = f"documents/{identity.tenant_id}/{patient.id}/{timestamp}_{identity.user_id}_{safe_name}"
 

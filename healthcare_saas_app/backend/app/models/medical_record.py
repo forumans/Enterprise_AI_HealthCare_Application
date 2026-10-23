@@ -21,4 +21,4 @@ class MedicalRecord(Base, SoftDeleteMixin):
     symptoms: Mapped[Optional[str]] = mapped_column(Text)
     diagnosis: Mapped[Optional[str]] = mapped_column(Text)
     lab_results: Mapped[Optional[str]] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=text("CURRENT_TIMESTAMP"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"), nullable=False)

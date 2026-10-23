@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.dependencies import CurrentIdentity, require_roles
 from ...core.database import get_db
+from ...core.timeutils import utc_now
 from ...models import Admin, Appointment, Doctor, MedicalRecord, Patient, User
 from ...services.audit_service import write_audit_log
 
@@ -21,7 +22,7 @@ router = APIRouter(prefix="/admin")
 def _appointment_window_starts(now: datetime) -> dict[str, datetime]:
     """Return normalized UTC window starts used for dashboard metrics."""
 
-    start_of_today = datetime.combine(now.date(), datetime.min.time())
+    start_of_today = datetime.combine(now.date(), time.min, tzinfo=now.tzinfo)
     start_of_week = start_of_today - timedelta(days=start_of_today.weekday())
     start_of_month = start_of_today.replace(day=1)
     start_of_year = start_of_today.replace(month=1, day=1)
@@ -174,7 +175,7 @@ async def admin_appointment_metrics(
 ) -> dict:
     """Return aggregate appointment totals for dashboard time ranges."""
 
-    now = datetime.now(UTC).replace(tzinfo=None)
+    now = utc_now()
     windows = _appointment_window_starts(now)
 
     stmt = select(
@@ -340,12 +341,12 @@ async def soft_delete_user(
             await db.execute(
                 update(User)
                 .where(User.id == user_uuid_to_update)
-                .values(is_active=False, deleted_at=datetime.utcnow())
+                .values(is_active=False, deleted_at=utc_now())
             )
             
             # Then update the patients table with deleted_at = NOW()
             old_data = {"deleted_at": patient.deleted_at.isoformat() if patient.deleted_at else None}
-            patient.deleted_at = datetime.utcnow()
+            patient.deleted_at = utc_now()
             patient.deleted_by = identity.user_id
             
             await write_audit_log(
@@ -366,7 +367,7 @@ async def soft_delete_user(
                 record_id=user_uuid_to_update,
                 action_type="DELETE",
                 old_data={"is_active": True, "deleted_at": None},
-                new_data={"is_active": False, "deleted_at": datetime.utcnow().isoformat()},
+                new_data={"is_active": False, "deleted_at": utc_now().isoformat()},
                 performed_by=identity.user_id,
             )
     elif user.role == "DOCTOR":
@@ -378,7 +379,7 @@ async def soft_delete_user(
         ).scalar_one_or_none()
         if doctor:
             old_data = {"deleted_at": doctor.deleted_at.isoformat() if doctor.deleted_at else None}
-            doctor.deleted_at = datetime.utcnow()
+            doctor.deleted_at = utc_now()
             doctor.deleted_by = identity.user_id
             
             await write_audit_log(
@@ -396,7 +397,7 @@ async def soft_delete_user(
             await db.execute(
                 update(User)
                 .where(User.id == user_id)
-                .values(is_active=False, deleted_at=datetime.utcnow())
+                .values(is_active=False, deleted_at=utc_now())
             )
             
             await write_audit_log(
@@ -406,7 +407,7 @@ async def soft_delete_user(
                 record_id=user_id,
                 action_type="DELETE",
                 old_data={"is_active": True, "deleted_at": None},
-                new_data={"is_active": False, "deleted_at": datetime.utcnow().isoformat()},
+                new_data={"is_active": False, "deleted_at": utc_now().isoformat()},
                 performed_by=identity.user_id,
             )
     elif user.role == "ADMIN":
@@ -418,7 +419,7 @@ async def soft_delete_user(
         ).scalar_one_or_none()
         if admin:
             old_data = {"deleted_at": admin.deleted_at.isoformat() if admin.deleted_at else None}
-            admin.deleted_at = datetime.utcnow()
+            admin.deleted_at = utc_now()
             admin.deleted_by = identity.user_id
             
             await write_audit_log(
@@ -436,7 +437,7 @@ async def soft_delete_user(
         await db.execute(
             update(User)
             .where(User.id == user_id)
-            .values(is_active=False, deleted_at=datetime.utcnow())
+            .values(is_active=False, deleted_at=utc_now())
         )
         
         await write_audit_log(
@@ -446,7 +447,7 @@ async def soft_delete_user(
             record_id=user_id,
             action_type="DELETE",
             old_data={"is_active": True, "deleted_at": None},
-            new_data={"is_active": False, "deleted_at": datetime.utcnow().isoformat()},
+            new_data={"is_active": False, "deleted_at": utc_now().isoformat()},
             performed_by=identity.user_id,
         )
     

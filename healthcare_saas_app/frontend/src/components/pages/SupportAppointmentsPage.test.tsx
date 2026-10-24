@@ -1,0 +1,116 @@
+import { describe, expect, it, vi, beforeEach } from "vitest";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { SupportAppointmentsPage } from "./SupportAppointmentsPage";
+import { api } from "../../api";
+
+vi.mock("../../api", () => ({
+  api: {
+    listDoctors: vi.fn(),
+    listPatients: vi.fn(),
+    supportSearchPatients: vi.fn(),
+    supportSearchDoctors: vi.fn(),
+    supportListAppointments: vi.fn(),
+    listAllDoctorAvailability: vi.fn(),
+    bookAppointment: vi.fn(),
+    updateAppointmentReason: vi.fn(),
+    cancelAppointment: vi.fn(),
+    rescheduleAppointment: vi.fn(),
+  },
+}));
+
+const auth = { session: { accessToken: "tok" } };
+const now = new Date();
+const tomorrowAt = (hour: number) => new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, hour);
+const steve = { id: "p1", name: "Steve Works", phone: "(555) 010-2030", email: "s@x.test", date_of_birth: "", gender: "", insurance_provider: "", city: "", state: "" };
+const upcoming = {
+  id: "apt-1", appointment_time: tomorrowAt(9).toISOString(), status: "SCHEDULED", reason: "Knee pain review",
+  patient_id: "p1", patient_name: "Steve Works", doctor_id: "d1", doctor_name: "Dr One",
+};
+
+async function pickSteve() {
+  render(<SupportAppointmentsPage auth={auth} mode="patient" />);
+  await userEvent.type(screen.getByLabelText("Find Patient"), "steve");
+  await userEvent.click(screen.getByRole("button", { name: "Search" }));
+  await userEvent.click(await screen.findByRole("button", { name: "Steve Works" }));
+  return screen.findByRole("heading", { name: /Upcoming Appointments for Steve Works/ });
+}
+
+/** The table row of an appointment, found by its reason text. */
+const appointmentRow = (reason: string) => screen.getByText(reason).closest("tr") as HTMLElement;
+
+describe("SupportAppointmentsPage (patient mode)", () => {
+  beforeEach(() => {
+    vi.mocked(api.listDoctors).mockResolvedValue([{ id: "d1", name: "Dr One", specialty: "Cardiology" }]);
+    vi.mocked(api.supportSearchPatients).mockResolvedValue([steve]);
+    vi.mocked(api.supportListAppointments).mockResolvedValue([upcoming]);
+    vi.mocked(api.listAllDoctorAvailability).mockResolvedValue([{ slot_time: tomorrowAt(15).toISOString(), status: "AVAILABLE" }]);
+    for (const fn of [api.bookAppointment, api.updateAppointmentReason, api.cancelAppointment]) vi.mocked(fn).mockReset();
+    vi.spyOn(window, "alert").mockImplementation(() => {});
+  });
+
+  it("finds a patient by search and lists their upcoming appointments with actions", async () => {
+    await pickSteve();
+    expect(api.supportSearchPatients).toHaveBeenCalledWith("tok", "steve");
+    expect(api.supportListAppointments).toHaveBeenCalledWith("tok", { patientId: "p1" });
+    const row = appointmentRow("Knee pain review");
+    expect(within(row).getByText("Dr One")).toBeInTheDocument();
+    for (const name of ["Edit Reason", "Reschedule", "Cancel"]) {
+      expect(within(row).getByRole("button", { name })).toBeInTheDocument();
+    }
+  });
+
+  it("edits the reason on the patient's behalf", async () => {
+    await pickSteve();
+    vi.spyOn(window, "prompt").mockReturnValue("Knee and ankle pain");
+    vi.mocked(api.updateAppointmentReason).mockResolvedValue({ id: "apt-1", reason: "Knee and ankle pain", status: "SCHEDULED" });
+    vi.mocked(api.supportListAppointments).mockResolvedValue([{ ...upcoming, reason: "Knee and ankle pain" }]);
+
+    await userEvent.click(within(appointmentRow("Knee pain review")).getByRole("button", { name: "Edit Reason" }));
+
+    expect(api.updateAppointmentReason).toHaveBeenCalledWith("tok", "apt-1", "Knee and ankle pain");
+    expect(await screen.findByText("Knee and ankle pain")).toBeInTheDocument();
+  });
+
+  it("rejects a too-short reason without calling the server", async () => {
+    await pickSteve();
+    vi.spyOn(window, "prompt").mockReturnValue("ok");
+    await userEvent.click(within(appointmentRow("Knee pain review")).getByRole("button", { name: "Edit Reason" }));
+    expect(window.alert).toHaveBeenCalledWith("Reason must be at least 5 characters.");
+    expect(api.updateAppointmentReason).not.toHaveBeenCalled();
+  });
+
+  it("cancels after confirmation", async () => {
+    await pickSteve();
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(api.cancelAppointment).mockResolvedValue({ message: "Appointment cancelled." });
+    vi.mocked(api.supportListAppointments).mockResolvedValue([]);
+
+    await userEvent.click(within(appointmentRow("Knee pain review")).getByRole("button", { name: "Cancel" }));
+
+    expect(api.cancelAppointment).toHaveBeenCalledWith("tok", "apt-1");
+    expect(await screen.findByText("No upcoming appointments")).toBeInTheDocument();
+  });
+
+  it("books a new appointment for the patient with the chosen doctor and slot", async () => {
+    await pickSteve();
+    vi.mocked(api.bookAppointment).mockResolvedValue({ id: "apt-2", status: "SCHEDULED" });
+
+    await userEvent.selectOptions(screen.getByLabelText(/Select Doctor/), "d1");
+    await userEvent.type(screen.getByLabelText(/Appointment Reason/), "Booked by phone call");
+    // Tables: search results, upcoming appointments, then the booking calendar once availability loads
+    await waitFor(() => expect(screen.getAllByRole("table")).toHaveLength(3));
+    const calendar = screen.getAllByRole("table")[2];
+    await userEvent.click(within(within(calendar).getAllByRole("cell")[1]).getByText("3:00 PM")); // tomorrow's column
+    await userEvent.click(screen.getByRole("button", { name: "Book Appointment" }));
+
+    expect(api.listAllDoctorAvailability).toHaveBeenCalledWith("d1", "tok");
+    expect(api.bookAppointment).toHaveBeenCalledWith("tok", {
+      doctor_id: "d1",
+      patient_id: "p1",
+      slot: tomorrowAt(15).toISOString(),
+      reason: "Booked by phone call",
+    });
+    expect(window.alert).toHaveBeenCalledWith(expect.stringContaining("Appointment booked for"));
+  });
+});

@@ -253,11 +253,12 @@ Deploy by uploading `dist/` to the S3 frontend bucket (see [Deployment Guide](de
 ## Running Tests
 
 ```bash
-# Unit tests (Vitest)
+# Unit and component tests (Vitest)
 npm run test
 
-# Unit tests with coverage
-npm run test:coverage
+# A single file, or watch mode while editing
+npx vitest run src/components/pages/AdminDeactivatePage.test.tsx
+npx vitest
 
 # E2E tests (Playwright — requires backend and frontend running)
 npx playwright test --config=playwright.simple.config.ts
@@ -265,3 +266,7 @@ npx playwright test --config=playwright.simple.config.ts
 # View E2E report
 npx playwright show-report
 ```
+
+Vitest runs in a simulated browser (jsdom, configured in `vitest.config.ts` with setup in `src/test/setup.ts`), so tests can render components with React Testing Library and drive them with `@testing-library/user-event`. Component tests sit next to the component (`Foo.test.tsx`) and mock `../../api` with `vi.mock`, so no backend is needed. Stub `window.confirm`/`alert`/`prompt` with `vi.spyOn(window, "confirm")` where a component asks for confirmation.
+
+Component tests cover the support staff search and appointment screens, the reschedule dialog and slot calendar, Today's Appointments actions (including button colors), the admin Reset Password / Email and Deactivate screens, the header menus per role, and the support staff login.

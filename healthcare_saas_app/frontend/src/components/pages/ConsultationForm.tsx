@@ -274,14 +274,13 @@ export function ConsultationForm({ session, appointmentId }: ConsultationFormPro
 
             <div className="form-field">
               <label className="label-row">
-                Diagnosis <span style={{ color: '#ff90ab' }}>*</span>
+                Lab Results
               </label>
               <textarea
-                value={consultationState.diagnosis}
-                onChange={(e) => updateConsultationState('diagnosis', e.target.value)}
-                placeholder="Enter diagnosis..."
+                value={consultationState.labResults}
+                onChange={(e) => updateConsultationState('labResults', e.target.value)}
+                placeholder="Enter lab results (if any)..."
                 rows={3}
-                required
                 style={{
                   width: '100%',
                   padding: '11px 12px',
@@ -298,13 +297,14 @@ export function ConsultationForm({ session, appointmentId }: ConsultationFormPro
 
             <div className="form-field">
               <label className="label-row">
-                Lab Results
+                Diagnosis <span style={{ color: '#ff90ab' }}>*</span>
               </label>
               <textarea
-                value={consultationState.labResults}
-                onChange={(e) => updateConsultationState('labResults', e.target.value)}
-                placeholder="Enter lab results (if any)..."
+                value={consultationState.diagnosis}
+                onChange={(e) => updateConsultationState('diagnosis', e.target.value)}
+                placeholder="Enter diagnosis..."
                 rows={3}
+                required
                 style={{
                   width: '100%',
                   padding: '11px 12px',

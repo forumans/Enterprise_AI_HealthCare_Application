@@ -10,6 +10,7 @@ from .medical_record import MedicalRecord
 from .patient import Patient
 from .pharmacy import Pharmacy
 from .prescription import Prescription
+from .support_staff import SupportStaff
 from .tenant import Tenant
 from .user import User
 
@@ -24,6 +25,7 @@ __all__ = [
     "PatientDocument",
     "Pharmacy",
     "Prescription",
+    "SupportStaff",
     "Tenant",
     "User",
 ]

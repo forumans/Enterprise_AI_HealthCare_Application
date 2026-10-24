@@ -1,13 +1,14 @@
 /**
  * Reschedule Appointment Modal
- * Shared by the patient (My Appointments) and doctor (Today's / Weekly Appointments) screens.
- * Shows the appointment's details read-only and the same doctor's availability calendar;
- * only the date/time changes - doctor, patient, reason and status are kept.
+ * Shared by the patient (My Appointments), doctor (Today's / Weekly Appointments) and
+ * support staff screens. Shows the appointment's details read-only and the same doctor's
+ * availability calendar; only the date/time changes - doctor, patient, reason and status are kept.
  */
 
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { api } from "../../api";
-import { OFFICE_HOUR_SLOTS, WORKDAY_FIRST_SLOT_HOUR, localSlotKey, parseServerDate, parseErrorMessage, rescheduleSlotState } from "../../utils";
+import { parseServerDate, parseErrorMessage } from "../../utils";
+import { SlotPickerCalendar } from "./SlotPickerCalendar";
 
 export interface RescheduleTarget {
   id: string;
@@ -28,40 +29,16 @@ interface RescheduleAppointmentModalProps {
   conflictingTimes?: string[];
 }
 
-const MAX_WEEK_OFFSET = 4;
-const cellBorder = '1px solid rgba(136, 194, 227, 0.36)';
 const labelStyle: React.CSSProperties = { fontSize: '12px', fontWeight: '700', color: '#42b5f5', textTransform: 'uppercase', display: 'block', marginBottom: '4px' };
 const valueStyle: React.CSSProperties = { margin: 0, fontSize: '14px', color: '#eef8ff' };
 
-const formatDateTime = (date: Date) =>
+export const formatDateTime = (date: Date) =>
   date.toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 
 export function RescheduleAppointmentModal({ target, accessToken, onClose, onRescheduled, conflictingTimes = [] }: RescheduleAppointmentModalProps) {
-  const [availability, setAvailability] = useState<Array<{ slot_time: string; status: "AVAILABLE" | "BOOKED" | "BLOCKED" }>>([]);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [weekOffset, setWeekOffset] = useState(0);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    setLoading(true);
-    api.listAllDoctorAvailability(target.doctorId, accessToken)
-      .then(setAvailability)
-      .catch((err) => {
-        console.error("Failed to load doctor availability:", err);
-        setError("Failed to load the doctor's availability.");
-      })
-      .finally(() => setLoading(false));
-  }, [target.doctorId, accessToken]);
-
-  const currentKey = localSlotKey(parseServerDate(target.appointmentTime));
-  const statusByKey = new Map(availability.map(a => [localSlotKey(parseServerDate(a.slot_time)), a.status]));
-  const conflictKeys = new Set(conflictingTimes.map(t => localSlotKey(parseServerDate(t))));
-
-  const now = new Date();
-  const startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + weekOffset * 7);
-  const days = Array.from({ length: 7 }, (_, i) => new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate() + i));
 
   const handleConfirm = async () => {
     if (!selectedKey) return;
@@ -80,16 +57,6 @@ export function RescheduleAppointmentModal({ target, accessToken, onClose, onRes
       setSaving(false);
     }
   };
-
-  const navButton = (disabled: boolean): React.CSSProperties => ({
-    padding: '8px 16px',
-    background: disabled ? '#94a3b8' : '#42b5f5',
-    color: 'white',
-    border: 'none',
-    borderRadius: '4px',
-    cursor: disabled ? 'not-allowed' : 'pointer',
-    fontSize: '14px'
-  });
 
   return (
     <div
@@ -128,93 +95,15 @@ export function RescheduleAppointmentModal({ target, accessToken, onClose, onRes
           )}
         </div>
 
-        {/* Week navigation */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', gap: '8px' }}>
-          <button onClick={() => setWeekOffset(o => Math.max(0, o - 1))} disabled={weekOffset === 0} style={navButton(weekOffset === 0)}>
-            Previous Week
-          </button>
-          <h4 style={{ margin: 0, color: '#eaf5ff' }}>
-            Week of {days[0].getMonth() + 1}/{days[0].getDate()} - {days[6].getMonth() + 1}/{days[6].getDate()}
-          </h4>
-          <button onClick={() => setWeekOffset(o => Math.min(MAX_WEEK_OFFSET, o + 1))} disabled={weekOffset === MAX_WEEK_OFFSET} style={navButton(weekOffset === MAX_WEEK_OFFSET)}>
-            Next Week
-          </button>
-        </div>
-
-        {loading ? (
-          <div style={{ textAlign: 'center', padding: '40px', color: '#b4cce2' }}>Loading availability...</div>
-        ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', border: cellBorder }}>
-              <thead>
-                <tr style={{ backgroundColor: 'rgba(9, 35, 55, 0.82)' }}>
-                  {days.map(day => (
-                    <th key={day.toDateString()} style={{ padding: '10px 6px', textAlign: 'center', border: cellBorder, color: '#42b5f5', fontSize: '12px', fontWeight: 'bold' }}>
-                      <div>{day.toLocaleDateString('en-US', { weekday: 'short' })}</div>
-                      <div style={{ fontSize: '10px', marginTop: '4px' }}>
-                        {String(day.getMonth() + 1).padStart(2, '0')}/{String(day.getDate()).padStart(2, '0')}
-                      </div>
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  {days.map(day => (
-                    <td key={day.toDateString()} style={{ border: cellBorder, padding: '4px', verticalAlign: 'top' }}>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                        {OFFICE_HOUR_SLOTS.map((label, i) => {
-                          const cell = new Date(day.getFullYear(), day.getMonth(), day.getDate(), WORKDAY_FIRST_SLOT_HOUR + i);
-                          const key = localSlotKey(cell);
-                          const state = rescheduleSlotState(cell, { now, currentKey, statusByKey, conflictKeys });
-                          const isPast = state === 'past';
-                          const isCurrent = state === 'current';
-                          const isSelected = key === selectedKey;
-                          const isAvailable = state === 'available';
-
-                          return (
-                            <div
-                              key={label}
-                              title={isCurrent ? 'Current appointment time' : undefined}
-                              onClick={() => { if (isAvailable && !saving) setSelectedKey(key); }}
-                              style={{
-                                padding: '4px 6px',
-                                borderRadius: '4px',
-                                fontSize: '11px',
-                                textAlign: 'center',
-                                fontWeight: '500',
-                                color: 'white',
-                                cursor: isAvailable ? 'pointer' : 'default',
-                                opacity: isPast ? 0.5 : 1,
-                                outline: isSelected ? '2px solid #ffffff' : 'none',
-                                backgroundColor: isPast ? '#2a2a2a' :
-                                  isCurrent ? '#42b5f5' :
-                                  isSelected ? '#f0a020' :
-                                  isAvailable ? '#28a745' :
-                                  '#6c757d'
-                              }}
-                            >
-                              {label}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </td>
-                  ))}
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        <div style={{ marginTop: '12px', display: 'flex', gap: '16px', fontSize: '12px', flexWrap: 'wrap' }}>
-          {[['#42b5f5', 'Current'], ['#f0a020', 'Selected'], ['#28a745', 'Available'], ['#6c757d', 'Unavailable']].map(([color, text]) => (
-            <div key={text} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <div style={{ width: '12px', height: '12px', backgroundColor: color, borderRadius: '2px' }}></div>
-              <span style={{ color: '#b4cce2' }}>{text}</span>
-            </div>
-          ))}
-        </div>
+        <SlotPickerCalendar
+          doctorId={target.doctorId}
+          accessToken={accessToken}
+          selectedKey={selectedKey}
+          onSelect={setSelectedKey}
+          currentTime={target.appointmentTime}
+          conflictingTimes={conflictingTimes}
+          disabled={saving}
+        />
 
         {error && (
           <div style={{ color: '#ff90ab', fontSize: '13px', marginTop: '12px' }}>{error}</div>

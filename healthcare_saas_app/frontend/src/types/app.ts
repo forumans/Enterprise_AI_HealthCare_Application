@@ -25,7 +25,7 @@ export type {
 };
 
 // Application-specific types
-export type MainMenu = "Home" | "Doctors" | "Patients" | "Admin";
+export type MainMenu = "Home" | "Doctors" | "Patients" | "Support Staff" | "Admin";
 
 export type FieldErrors = Record<string, string>;
 

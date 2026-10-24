@@ -7,13 +7,13 @@ from datetime import date, datetime, timedelta
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, case, func, select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.dependencies import CurrentIdentity, require_roles
 from ...core.database import get_db
 from ...core.timeutils import clinic_day_start, clinic_today, utc_now
-from ...models import Admin, Appointment, Doctor, MedicalRecord, Patient, User
+from ...models import Admin, Appointment, Doctor, MedicalRecord, Patient, SupportStaff, User
 from ...services.audit_service import write_audit_log
 
 router = APIRouter(prefix="/admin")
@@ -80,6 +80,14 @@ async def admin_list_users(
                 full_name = admin.full_name
             else:
                 full_name = row.email
+        elif row.role == "SUPPORT_STAFF":
+            staff = (
+                await db.execute(
+                    select(SupportStaff).where(SupportStaff.user_id == row.id)
+                )
+            ).scalar_one_or_none()
+            if staff:
+                full_name = staff.full_name
         
         result.append({
             "id": row.id,
@@ -206,7 +214,7 @@ async def admin_appointment_metrics(
 
 
 class AdminCreateUserRequest(BaseModel):
-    role: str = Field(pattern="^(PATIENT|DOCTOR|ADMIN)$")
+    role: str = Field(pattern="^(PATIENT|DOCTOR|ADMIN|SUPPORT_STAFF)$")
     full_name: str = Field(min_length=3, max_length=255)
     email: str = Field(min_length=5, max_length=255)
     password: str = Field(min_length=5, max_length=255)
@@ -262,7 +270,15 @@ async def admin_create_user(
         await db.flush()
     except IntegrityError:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered.")
-    
+    except DBAPIError as exc:
+        if payload.role == "SUPPORT_STAFF":
+            # The user_role enum lacks SUPPORT_STAFF until migrations/005_add_support_staff_role.sql is applied
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Support staff accounts aren't available yet: the database needs migration 005_add_support_staff_role.sql.",
+            ) from exc
+        raise
+
     # Create role-specific record
     if payload.role == "PATIENT":
         patient = Patient(
@@ -301,6 +317,15 @@ async def admin_create_user(
             phone=payload.phone,
         )
         db.add(admin)
+    elif payload.role == "SUPPORT_STAFF":
+        db.add(
+            SupportStaff(
+                tenant_id=identity.tenant_id,
+                user_id=user.id,
+                full_name=payload.full_name,
+                phone=payload.phone or None,
+            )
+        )
     
     await db.commit()
     return {"id": str(user.id)}
@@ -407,30 +432,31 @@ async def soft_delete_user(
                 new_data={"is_active": False, "deleted_at": utc_now().isoformat()},
                 performed_by=identity.user_id,
             )
-    elif user.role == "ADMIN":
-        # Find and soft delete the admin record
-        admin = (
+    elif user.role in ("ADMIN", "SUPPORT_STAFF"):
+        # Find and soft delete the admin / support staff record
+        profile_model, table_name = (Admin, "admins") if user.role == "ADMIN" else (SupportStaff, "support_staff")
+        profile = (
             await db.execute(
-                select(Admin).where(Admin.user_id == user_id, Admin.deleted_at.is_(None))
+                select(profile_model).where(profile_model.user_id == user_id, profile_model.deleted_at.is_(None))
             )
         ).scalar_one_or_none()
-        if admin:
-            old_data = {"deleted_at": admin.deleted_at.isoformat() if admin.deleted_at else None}
-            admin.deleted_at = utc_now()
-            admin.deleted_by = identity.user_id
+        if profile:
+            old_data = {"deleted_at": profile.deleted_at.isoformat() if profile.deleted_at else None}
+            profile.deleted_at = utc_now()
+            profile.deleted_by = identity.user_id
             
             await write_audit_log(
                 db,
                 tenant_id=identity.tenant_id,
-                table_name="admins",
-                record_id=admin.id,
+                table_name=table_name,
+                record_id=profile.id,
                 action_type="DELETE",
                 old_data=old_data,
-                new_data={"deleted_at": admin.deleted_at.isoformat(), "deleted_by": identity.user_id},
+                new_data={"deleted_at": profile.deleted_at.isoformat(), "deleted_by": identity.user_id},
                 performed_by=identity.user_id,
             )
         
-        # Also soft delete the user record for admins
+        # Also soft delete the user record for admins / support staff
         await db.execute(
             update(User)
             .where(User.id == user_id)

@@ -8,7 +8,7 @@ import React from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useNavigation } from "../../hooks/useNavigation";
 import { getRouteBreadcrumb } from "../../app/routeBreadcrumbs";
-import type { SessionState } from "../../types/app";
+import type { MainMenu, SessionState } from "../../types/app";
 
 interface AppHeaderProps {
   session: SessionState;
@@ -32,7 +32,7 @@ export function AppHeader({ session, onSignOut, tenantInfo }: AppHeaderProps) {
 
   const breadcrumb = getRouteBreadcrumb(window.location.pathname);
 
-  const mainMenus: Array<"Home" | "Doctors" | "Patients" | "Admin"> = ["Home", "Doctors", "Patients", "Admin"];
+  const mainMenus: MainMenu[] = ["Home", "Doctors", "Patients", "Support Staff", "Admin"];
 
   return (
     <header className="topbar">

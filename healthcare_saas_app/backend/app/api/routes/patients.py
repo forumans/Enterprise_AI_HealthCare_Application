@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy import and_, select
+from sqlalchemy import and_, select, true
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,6 +12,7 @@ from ...core.dependencies import CurrentIdentity, get_current_identity, require_
 from ...core.database import get_db
 from ...models import Appointment, MedicalRecord, Patient, Prescription, User, Doctor
 from ...services.audit_service import write_audit_log
+from ..search_utils import is_wildcard, search_limit
 
 router = APIRouter(prefix="/patients")
 
@@ -72,7 +73,7 @@ async def create_patient(
 
 @router.get("")
 async def list_patients(
-    identity: CurrentIdentity = Depends(require_roles("ADMIN", "DOCTOR")),
+    identity: CurrentIdentity = Depends(require_roles("ADMIN", "DOCTOR", "SUPPORT_STAFF")),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     stmt = select(Patient).where(
@@ -92,8 +93,10 @@ async def search_patients(
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     query = q.strip()
-    if len(query) < 2:
+    if len(query) < 2 and not is_wildcard(query):
         return []
+    # "*" lists every patient; otherwise match part of the name
+    name_filter = true() if is_wildcard(query) else Patient.full_name.ilike(f"%{query}%")
 
     stmt = (
         select(Patient, Appointment, MedicalRecord, Prescription)
@@ -127,10 +130,10 @@ async def search_patients(
         .where(
             Patient.tenant_id == identity.tenant_id,
             Patient.deleted_at.is_(None),
-            Patient.full_name.ilike(f"%{query}%"),
+            name_filter,
         )
         .order_by(Patient.full_name.asc(), Appointment.appointment_time.desc())
-        .limit(50)
+        .limit(search_limit(query))
     )
     rows = (await db.execute(stmt)).all()
     return [

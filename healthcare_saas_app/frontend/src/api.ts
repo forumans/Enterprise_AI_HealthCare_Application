@@ -1,10 +1,14 @@
 import type {
   AppointmentMetrics,
   AdminUserRow,
+  AdminUserSearchRow,
   AppointmentRow,
   DoctorAppointmentRow,
   LoginResponse,
   PatientSearchRow,
+  SupportAppointmentRow,
+  SupportDoctorRow,
+  SupportPatientRow,
 } from "./types";
 
 const baseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "http://127.0.0.1:8000";
@@ -145,7 +149,7 @@ export const api = {
       headers: withAuth(token),
     }),
 
-  bookAppointment: (token: string, payload: { doctor_id: string; slot: string; reason: string }) =>
+  bookAppointment: (token: string, payload: { doctor_id: string; slot: string; reason: string; patient_id?: string }) =>
     request<{ id: string; status: string }>("/appointments", {
       method: "POST",
       headers: withAuth(token),
@@ -274,7 +278,7 @@ export const api = {
   adminCreateUser: (
     token: string,
     payload: {
-      role: "DOCTOR" | "PATIENT" | "ADMIN";
+      role: "DOCTOR" | "PATIENT" | "ADMIN" | "SUPPORT_STAFF";
       full_name?: string;
       email: string;
       phone?: string;
@@ -449,6 +453,50 @@ export const api = {
       ...(token && { headers: withAuth(token) }),
     }),
 
+  updateAppointmentReason: (token: string, appointmentId: string, reason: string) =>
+    request<{ id: string; reason: string; status: string }>(`/appointments/${appointmentId}`, {
+      method: "PATCH",
+      headers: withAuth(token),
+      body: JSON.stringify({ reason }),
+    }),
+
+  listPatients: (token: string) =>
+    request<Array<{ id: string; user_id: string; name: string; phone: string }>>("/patients", {
+      method: "GET",
+      headers: withAuth(token),
+    }),
+
+  getSupportProfile: (token: string) =>
+    request<{ id: string; full_name: string; phone: string; email: string }>("/support/profile", {
+      method: "GET",
+      headers: withAuth(token),
+    }),
+
+  updateSupportProfile: (token: string, payload: { full_name: string; phone: string }) =>
+    request<{ message: string; full_name: string; phone: string; email: string }>("/support/profile", {
+      method: "PUT",
+      headers: withAuth(token),
+      body: JSON.stringify(payload),
+    }),
+
+  supportSearchDoctors: (token: string, q: string) =>
+    request<SupportDoctorRow[]>(`/support/doctors?q=${encodeURIComponent(q)}`, {
+      method: "GET",
+      headers: withAuth(token),
+    }),
+
+  supportSearchPatients: (token: string, q: string) =>
+    request<SupportPatientRow[]>(`/support/patients?q=${encodeURIComponent(q)}`, {
+      method: "GET",
+      headers: withAuth(token),
+    }),
+
+  supportListAppointments: (token: string, filter: { patientId?: string; doctorId?: string }) =>
+    request<SupportAppointmentRow[]>(
+      `/support/appointments?${filter.patientId ? `patient_id=${encodeURIComponent(filter.patientId)}` : `doctor_id=${encodeURIComponent(filter.doctorId ?? "")}`}`,
+      { method: "GET", headers: withAuth(token) }
+    ),
+
   rescheduleAppointment: (token: string, appointmentId: string, slot: string) =>
     request<{ id: string; appointment_time: string; status: string }>(`/appointments/${appointmentId}/reschedule`, {
       method: "POST",
@@ -512,6 +560,7 @@ export const api = {
       slot: slotTime,
       is_available: isAvailable,
       block_reason: blockReason,
+      doctor_id: doctorId,
     };
     return request<{ message: string }>(`/doctor/availability`, {
       method: "POST",
@@ -582,6 +631,32 @@ export const api = {
       method: 'POST',
       headers: withAuth(token),
       body: JSON.stringify({ email, role, new_password: newPassword }),
+    }),
+
+  adminSearchUsers: (token: string, role: string, q: string) =>
+    request<AdminUserSearchRow[]>(`/admin/users/search?role=${encodeURIComponent(role)}&q=${encodeURIComponent(q)}`, {
+      method: 'GET',
+      headers: withAuth(token),
+    }),
+
+  adminResetPasswordById: (token: string, userId: string, newPassword: string) =>
+    request<{ message: string; user_id: string; user_email: string; user_role: string }>(`/admin/users/${userId}/reset-password`, {
+      method: 'POST',
+      headers: withAuth(token),
+      body: JSON.stringify({ new_password: newPassword }),
+    }),
+
+  adminSetUserActive: (token: string, userId: string, active: boolean) =>
+    request<{ message: string; user_id: string; user_email: string; user_role: string; is_active: boolean }>(
+      `/admin/users/${userId}/${active ? 'activate' : 'deactivate'}`,
+      { method: 'POST', headers: withAuth(token) }
+    ),
+
+  adminChangeEmailById: (token: string, userId: string, newEmail: string) =>
+    request<{ message: string; user_id: string; old_email: string; new_email: string; user_role: string }>(`/admin/users/${userId}/change-email`, {
+      method: 'POST',
+      headers: withAuth(token),
+      body: JSON.stringify({ new_email: newEmail }),
     }),
 
   getResetPasswordRoles: (token: string) =>

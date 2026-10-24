@@ -159,12 +159,14 @@ Authentication is via `Authorization: Bearer <token>` header unless marked **Pub
 ---
 
 ### POST `/api/doctor/availability`
-**DOCTOR** — Create or update an availability slot.
+**DOCTOR** (own slots) / **SUPPORT_STAFF** (any doctor, `doctor_id` required) — Add, block or unblock an availability slot. Patient-booked slots can't be changed (`400`).
 
 ```json
 {
-  "slot_time": "2026-04-15T09:00:00",
-  "status": "AVAILABLE"
+  "slot": "2026-04-15T13:00:00.000Z",
+  "is_available": false,
+  "block_reason": "Staff training",
+  "doctor_id": "uuid"
 }
 ```
 
@@ -178,18 +180,18 @@ Authentication is via `Authorization: Bearer <token>` header unless marked **Pub
 ## Appointments
 
 ### POST `/api/appointments`
-**PATIENT** — Book an appointment.
+**PATIENT** (for themselves) / **SUPPORT_STAFF** (on behalf of a patient, `patient_id` required) — Book an available future slot.
 
 ```json
 {
   "doctor_id": "uuid",
-  "slot_id": "uuid",
-  "appointment_time": "2026-04-15T09:00:00",
-  "notes": "Follow-up for blood pressure"
+  "slot": "2026-04-15T13:00:00.000Z",
+  "reason": "Follow-up for blood pressure",
+  "patient_id": "uuid"
 }
 ```
 
-**Response `201`:** `{ "id": "uuid" }`
+**Response `201`:** `{ "id": "uuid", "status": "SCHEDULED" }`
 
 ---
 
@@ -217,8 +219,17 @@ Authentication is via `Authorization: Bearer <token>` header unless marked **Pub
 
 ---
 
+### PATCH `/api/appointments/{appointment_id}`
+**SUPPORT_STAFF** — Update the reason of a `SCHEDULED` or `CONFIRMED` appointment on behalf of the patient.
+
+```json
+{ "reason": "Follow-up on blood work" }
+```
+
+---
+
 ### POST `/api/appointments/{appointment_id}/reschedule`
-**PATIENT** (own appointments) / **DOCTOR** (their appointments) — Move a `SCHEDULED` or `CONFIRMED` appointment to another available slot of the same doctor. Reason, patient, doctor and status are kept; the old slot is freed and the new one booked.
+**PATIENT** (own appointments) / **DOCTOR** (their appointments) / **SUPPORT_STAFF** (any appointment) — Move a `SCHEDULED` or `CONFIRMED` appointment to another available slot of the same doctor. Reason, patient, doctor and status are kept; the old slot is freed and the new one booked.
 
 ```json
 { "slot": "2026-10-25T18:00:00.000Z" }
@@ -229,7 +240,7 @@ Errors: `400` past time / same time / not reschedulable status, `403` not your a
 ---
 
 ### DELETE `/api/appointments/{appointment_id}`
-**PATIENT** (own appointments) / **DOCTOR** (their appointments) — Cancel a scheduled or confirmed appointment (soft delete); the slot becomes available again. `403` if it isn't yours.
+**PATIENT** (own appointments) / **DOCTOR** (their appointments) / **SUPPORT_STAFF** (any appointment) — Cancel a scheduled or confirmed appointment (soft delete); the slot becomes available again. `403` if it isn't yours.
 
 ---
 
@@ -241,12 +252,12 @@ Errors: `400` past time / same time / not reschedulable status, `403` not your a
 ---
 
 ### GET `/api/patients`
-**ADMIN / DOCTOR** — List all patients in the tenant.
+**ADMIN / DOCTOR / SUPPORT_STAFF** — List all patients in the tenant.
 
 ---
 
 ### GET `/api/patients/search`
-**DOCTOR / ADMIN** — Search patients by name.
+**DOCTOR / ADMIN** — Search patients by name; `?q=*` lists every patient.
 
 **Query params:** `?q=Jane`
 
@@ -361,6 +372,45 @@ Errors: `400` past time / same time / not reschedulable status, `403` not your a
 
 ---
 
+## Support Staff
+
+### GET `/api/support/profile`
+**SUPPORT_STAFF** — The logged-in support staff member's profile: `{ "id", "full_name", "phone", "email" }`.
+
+---
+
+### PUT `/api/support/profile`
+**SUPPORT_STAFF** — Update your own name and phone. Email is the login and can't be changed here. `422` if the name is shorter than 3 characters or the phone isn't 10–15 digits.
+
+```json
+{ "full_name": "Sam Support", "phone": "+1 555-123-4567" }
+```
+
+---
+
+### GET `/api/support/doctors`
+**SUPPORT_STAFF** — Find doctors by part of their name or phone number, matched the same way as the patient search below. Returns name, phone, email, specialty and license number. Up to 50 results.
+
+**Query params:** `?q=<at least 2 characters, or * for everyone>` (`422` otherwise). `*` returns everyone with no 50-result cap.
+
+---
+
+### GET `/api/support/patients`
+**SUPPORT_STAFF** — Find patients by part of their name (case-insensitive) or phone number (formatting ignored, 3+ digits). Returns contact details only — name, phone, email, date of birth, gender, insurance provider, city, state — no medical data. Up to 50 results.
+
+**Query params:** `?q=<at least 2 characters, or * for everyone>` (`422` otherwise). `*` returns everyone with no 50-result cap.
+
+---
+
+### GET `/api/support/appointments`
+**SUPPORT_STAFF** — Active appointments from the start of today (clinic time) for one patient or one doctor, with patient and doctor names.
+
+**Query params:** exactly one of `?patient_id=uuid` or `?doctor_id=uuid` (`422` otherwise).
+
+Booking, reason updates, rescheduling, cancelling and slot blocking use the appointment and availability endpoints above, which accept the `SUPPORT_STAFF` role.
+
+---
+
 ## Admin
 
 ### GET `/api/admin/users`
@@ -371,7 +421,7 @@ Errors: `400` past time / same time / not reschedulable status, `403` not your a
 ---
 
 ### POST `/api/admin/users`
-**ADMIN** — Create a user account.
+**ADMIN** — Create a user account. `role` is one of `PATIENT`, `DOCTOR`, `ADMIN`, `SUPPORT_STAFF`.
 
 ---
 
@@ -391,6 +441,46 @@ Errors: `400` past time / same time / not reschedulable status, `403` not your a
 ```json
 { "user_id": "uuid", "new_password": "newpassword" }
 ```
+
+---
+
+### GET `/api/admin/users/search`
+**ADMIN** — Find active users of one role in this clinic by part of their name, email or phone number (used by the Reset Password / Email screen). Returns `user_id`, `role`, `name`, `email`, `phone`, `address` (patients), `date_of_birth`, `specialty` (doctors). Up to 50 results.
+
+**Query params:** `?role=PATIENT|DOCTOR|SUPPORT_STAFF|ADMIN&q=<at least 2 characters, or * for everyone of that role>` (`400` bad role, `422` short query). `*` returns all matches with no 50-result cap.
+
+---
+
+### POST `/api/admin/users/{user_id}/deactivate`
+**ADMIN** — Deactivate an account (sets `users.is_active = false`); it can't log in until activated again. Records and appointments are kept. Errors: `400` your own account or already deactivated, `403` your own admin account is deactivated, `404` not in this clinic, `409` it would leave no active admin.
+
+---
+
+### POST `/api/admin/users/{user_id}/activate`
+**ADMIN** — Re-activate a deactivated account so it can log in again. `400` if it's already active.
+
+Search results (`GET /api/admin/users/search`) include `is_active` and `is_self` for the Deactivate screen.
+
+---
+
+### POST `/api/admin/users/{user_id}/reset-password`
+**ADMIN** — Reset the picked user's password: `{ "new_password": "at least 8 characters" }`. Audited without the password. `404` if the user isn't in this clinic.
+
+---
+
+### POST `/api/admin/users/{user_id}/change-email`
+**ADMIN** — Change the picked user's login email: `{ "new_email": "new@example.com" }`. Same rules and errors as `/api/admin/change-email` below.
+
+---
+
+### POST `/api/admin/change-email`
+**ADMIN** — Change a user's login email, found by current email and role. Emails are trimmed and lowercased; the password is unchanged.
+
+```json
+{ "email": "old@example.com", "role": "PATIENT", "new_email": "new@example.com" }
+```
+
+Errors: `400` same email or invalid role, `404` no such user, `409` the new email is used by an active account in any clinic (login looks emails up across clinics) or by any account in this clinic.
 
 ---
 

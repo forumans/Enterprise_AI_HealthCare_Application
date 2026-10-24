@@ -23,6 +23,7 @@ class CreateAppointmentRequest(BaseModel):
     doctor_id: str
     slot: str = Field(description="ISO datetime string for appointment_time")
     reason: str = Field(min_length=5)
+    patient_id: str | None = Field(default=None, description="Required for support staff booking on behalf of a patient")
 
 
 class UpdateAppointmentStatusRequest(BaseModel):
@@ -33,6 +34,10 @@ class RescheduleAppointmentRequest(BaseModel):
     slot: str = Field(description="ISO datetime string for the new appointment_time")
 
 
+class UpdateAppointmentRequest(BaseModel):
+    reason: str = Field(min_length=5)
+
+
 def _week_bounds(from_date: date | None) -> tuple[datetime, datetime]:
     return clinic_week_bounds(from_date or clinic_today())
 
@@ -40,12 +45,19 @@ def _week_bounds(from_date: date | None) -> tuple[datetime, datetime]:
 @router.post("/appointments", status_code=status.HTTP_201_CREATED)
 async def create_appointment(
     payload: CreateAppointmentRequest,
-    identity: CurrentIdentity = Depends(require_roles("PATIENT")),
+    identity: CurrentIdentity = Depends(require_roles("PATIENT", "SUPPORT_STAFF")),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    if (identity.role or "").upper() == "SUPPORT_STAFF":
+        # Booking on behalf of a patient of this clinic
+        if not payload.patient_id:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="patient_id is required.")
+        patient_condition = Patient.id == payload.patient_id
+    else:
+        patient_condition = Patient.user_id == identity.user_id
     patient_stmt = select(Patient).where(
         and_(
-            Patient.user_id == identity.user_id,
+            patient_condition,
             Patient.tenant_id == identity.tenant_id,
             Patient.deleted_at.is_(None),
         )
@@ -58,6 +70,8 @@ async def create_appointment(
         appointment_time = parse_client_datetime(payload.slot)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid slot timestamp.") from exc
+    if appointment_time <= utc_now():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot book a time in the past.")
 
     record = await book_appointment(
         db,
@@ -368,10 +382,13 @@ async def confirm_appointment(
 async def reschedule_appointment_route(
     appointment_id: str,
     payload: RescheduleAppointmentRequest,
-    identity: CurrentIdentity = Depends(require_roles("PATIENT", "DOCTOR")),
+    identity: CurrentIdentity = Depends(require_roles("PATIENT", "DOCTOR", "SUPPORT_STAFF")),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Move an appointment to a different slot with the same doctor; reason, patient and status are kept."""
+    """Move an appointment to a different slot with the same doctor; reason, patient and status are kept.
+
+    Patients and doctors may move only their own appointments; support staff any in the tenant.
+    """
 
     try:
         new_time = parse_client_datetime(payload.slot)
@@ -394,22 +411,24 @@ async def reschedule_appointment_route(
     if appointment is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Appointment not found.")
 
-    if (identity.role or "").upper() == "PATIENT":
-        owner = select(Patient.id).where(
-            Patient.user_id == identity.user_id,
-            Patient.tenant_id == identity.tenant_id,
-            Patient.deleted_at.is_(None),
-        )
-        expected_owner = appointment.patient_id
-    else:
-        owner = select(Doctor.id).where(
-            Doctor.user_id == identity.user_id,
-            Doctor.tenant_id == identity.tenant_id,
-            Doctor.deleted_at.is_(None),
-        )
-        expected_owner = appointment.doctor_id
-    if (await db.execute(owner)).scalar_one_or_none() != expected_owner:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to reschedule this appointment.")
+    role = (identity.role or "").upper()
+    if role != "SUPPORT_STAFF":
+        if role == "PATIENT":
+            owner = select(Patient.id).where(
+                Patient.user_id == identity.user_id,
+                Patient.tenant_id == identity.tenant_id,
+                Patient.deleted_at.is_(None),
+            )
+            expected_owner = appointment.patient_id
+        else:
+            owner = select(Doctor.id).where(
+                Doctor.user_id == identity.user_id,
+                Doctor.tenant_id == identity.tenant_id,
+                Doctor.deleted_at.is_(None),
+            )
+            expected_owner = appointment.doctor_id
+        if (await db.execute(owner)).scalar_one_or_none() != expected_owner:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to reschedule this appointment.")
 
     if appointment.status not in {"SCHEDULED", "CONFIRMED"}:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only scheduled or confirmed appointments can be rescheduled.")
@@ -430,3 +449,40 @@ async def reschedule_appointment_route(
     return {"id": appointment.id, "appointment_time": new_time.isoformat(), "status": appointment.status}
 
 
+@router.patch("/appointments/{appointment_id}")
+async def update_appointment(
+    appointment_id: str,
+    payload: UpdateAppointmentRequest,
+    identity: CurrentIdentity = Depends(require_roles("SUPPORT_STAFF")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Update an appointment's reason on behalf of the patient (support staff). Time changes go through /reschedule."""
+
+    appointment = (
+        await db.execute(
+            select(Appointment).where(
+                Appointment.id == appointment_id,
+                Appointment.tenant_id == identity.tenant_id,
+                Appointment.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if appointment is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Appointment not found.")
+    if appointment.status not in {"SCHEDULED", "CONFIRMED"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only scheduled or confirmed appointments can be updated.")
+
+    old_reason = appointment.notes
+    appointment.notes = payload.reason.strip()
+    await write_audit_log(
+        db,
+        tenant_id=identity.tenant_id,
+        table_name="appointments",
+        record_id=appointment.id,
+        action_type="UPDATE",
+        old_data={"notes": old_reason},
+        new_data={"notes": appointment.notes},
+        performed_by=identity.user_id,
+    )
+    await db.commit()
+    return {"id": appointment.id, "reason": appointment.notes, "status": appointment.status}

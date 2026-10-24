@@ -24,13 +24,22 @@ export const submenuMap: SubmenuMap = {
     { to: "/patients/billing", label: "Billing", requiresAuth: true, role: "PATIENT" },
     { to: "/patients/profile", label: "Update Profile", requiresAuth: true, role: "PATIENT" },
   ],
+  "Support Staff": [
+    { to: "/support/login", label: "Login", hideWhenAuth: true },
+    { to: "/support/patient-appointments", label: "Patient Appointments", requiresAuth: true, role: "SUPPORT_STAFF" },
+    { to: "/support/doctor-appointments", label: "Doctor Appointments", requiresAuth: true, role: "SUPPORT_STAFF" },
+    { to: "/support/doctor-availability", label: "Doctor Availability", requiresAuth: true, role: "SUPPORT_STAFF" },
+    { to: "/support/profile", label: "Update Profile", requiresAuth: true, role: "SUPPORT_STAFF" },
+  ],
   Admin: [
     { to: "/admin/login", label: "Login Admin", hideWhenAuth: true },
+    { to: "/admin/system-dashboard", label: "System Dashboard", requiresAuth: true, role: "ADMIN" },
     { to: "/admin/register-doctor", label: "Register Doctor", requiresAuth: true, role: "ADMIN" },
     { to: "/admin/register-patient", label: "Register Patient", requiresAuth: true, role: "ADMIN" },
     { to: "/admin/register-admin", label: "Register Admin", requiresAuth: true, role: "ADMIN" },
-    { to: "/admin/system-dashboard", label: "System Dashboard", requiresAuth: true, role: "ADMIN" },
-    { to: "/admin/reset-password", label: "Reset Password", requiresAuth: true, role: "ADMIN" },
+    { to: "/admin/register-support-staff", label: "Register Support Staff", requiresAuth: true, role: "ADMIN" },
+    { to: "/admin/reset-password", label: "Reset Password / Email", requiresAuth: true, role: "ADMIN" },
+    { to: "/admin/deactivate", label: "Deactivate", requiresAuth: true, role: "ADMIN" },
   ],
 };
 
@@ -45,6 +54,9 @@ export function getMainMenuFromPath(pathname: string): MainMenu {
   }
   if (pathname.startsWith("/patients")) {
     return "Patients";
+  }
+  if (pathname.startsWith("/support")) {
+    return "Support Staff";
   }
   if (pathname.startsWith("/admin")) {
     return "Admin";

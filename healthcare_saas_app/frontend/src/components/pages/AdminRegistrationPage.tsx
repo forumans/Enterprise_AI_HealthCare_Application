@@ -1,7 +1,7 @@
 /**
  * Admin Registration Page Component
- * Handles admin registration with validation and API integration
- * Used by existing admins to register new admin users
+ * Handles admin and support staff registration with validation and API integration
+ * Used by existing admins to register new admin or support staff users
  */
 
 import React, { useState, useEffect } from "react";
@@ -21,9 +21,27 @@ interface FieldErrors {
 
 interface AdminRegistrationPageProps {
   auth: any;
+  /** Which kind of account to create; defaults to another admin. */
+  role?: "ADMIN" | "SUPPORT_STAFF";
 }
 
-export function AdminRegistrationPage({ auth }: AdminRegistrationPageProps) {
+const COPY = {
+  ADMIN: {
+    title: "Admin Registration",
+    subtitle: "Register a new administrator to manage the healthcare system",
+    submit: "Register Admin",
+    success: "Admin registered successfully",
+  },
+  SUPPORT_STAFF: {
+    title: "Support Staff Registration",
+    subtitle: "Register support staff who manage appointments and doctor availability on behalf of patients and doctors",
+    submit: "Register Support Staff",
+    success: "Support staff registered successfully",
+  },
+};
+
+export function AdminRegistrationPage({ auth, role = "ADMIN" }: AdminRegistrationPageProps) {
+  const copy = COPY[role];
   const { status, setStatus } = useAuthContext();
   const navigate = useNavigate();
   
@@ -70,14 +88,16 @@ export function AdminRegistrationPage({ auth }: AdminRegistrationPageProps) {
     }
     
     try {
-      const result = await api.registerAdmin({
-        fullName: fullName.trim(),
+      // /admin/users returns the new user's id, not a message
+      await api.adminCreateUser(auth.session.accessToken, {
+        role,
+        full_name: fullName.trim(),
         email: email.trim(),
         password: password,
         phone: phone.trim(),
-      }, auth.session.accessToken);
+      });
       
-      setStatus(result.message);
+      setStatus(copy.success);
       
       // Clear form after successful registration
       setFullName("");
@@ -93,9 +113,9 @@ export function AdminRegistrationPage({ auth }: AdminRegistrationPageProps) {
 
   return (
     <section style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-      <h2>Admin Registration</h2>
+      <h2>{copy.title}</h2>
       <p style={{ color: '#b4cce2', marginBottom: '24px' }}>
-        Register a new administrator to manage the healthcare system
+        {copy.subtitle}
       </p>
       
       {status && (
@@ -190,7 +210,7 @@ export function AdminRegistrationPage({ auth }: AdminRegistrationPageProps) {
               fontWeight: '500'
             }}
           >
-            Register Admin
+            {copy.submit}
           </button>
         </div>
       </form>

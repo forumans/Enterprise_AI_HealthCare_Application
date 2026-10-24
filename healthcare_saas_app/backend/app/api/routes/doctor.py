@@ -142,6 +142,32 @@ class UpsertDoctorAvailabilityRequest(BaseModel):
     slot: str = Field(description="ISO datetime string for slot_time")
     is_available: bool = True
     block_reason: str | None = None
+    doctor_id: str | None = Field(default=None, description="Required for support staff acting on behalf of a doctor")
+
+
+async def _doctor_for_slot_change(db: AsyncSession, identity: CurrentIdentity, doctor_id: str | None) -> Doctor:
+    """Doctor whose slots the caller may change: a doctor only their own, support staff any in the tenant."""
+
+    role = (identity.role or "").upper()
+    if role == "DOCTOR":
+        condition = Doctor.user_id == identity.user_id
+    elif role == "SUPPORT_STAFF":
+        if not doctor_id:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="doctor_id is required.")
+        condition = Doctor.id == doctor_id
+    else:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this role.")
+
+    doctor = (
+        await db.execute(
+            select(Doctor).where(condition, Doctor.tenant_id == identity.tenant_id, Doctor.deleted_at.is_(None))
+        )
+    ).scalar_one_or_none()
+    if doctor is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Doctor profile not found.")
+    if doctor_id and doctor.id != doctor_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to change another doctor's availability.")
+    return doctor
 
 
 @router.post("/doctors", status_code=status.HTTP_201_CREATED)
@@ -390,19 +416,7 @@ async def upsert_availability(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid datetime format.") from exc
 
-    # Verify the doctor belongs to the same tenant
-    doctor = await db.execute(
-        select(Doctor).where(
-            and_(
-                Doctor.id == doctor_id,
-                Doctor.tenant_id == identity.tenant_id,
-                Doctor.deleted_at.is_(None),
-            )
-        )
-    )
-    doctor = doctor.scalar_one_or_none()
-    if not doctor:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Doctor not found.")
+    await _doctor_for_slot_change(db, identity, doctor_id)
 
     # Check if slot already exists
     existing = await db.execute(
@@ -416,6 +430,8 @@ async def upsert_availability(
     existing = existing.scalar_one_or_none()
 
     if existing:
+        if existing.status == "BOOKED":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot modify a patient-booked slot.")
         # Update existing
         existing.status = "AVAILABLE" if payload.is_available else "BLOCKED"
         await db.commit()
@@ -450,6 +466,8 @@ async def delete_availability(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid datetime format.") from exc
 
+    await _doctor_for_slot_change(db, identity, doctor_id)
+
     # Find and delete the availability
     availability = await db.execute(
         select(DoctorAvailability).where(
@@ -463,6 +481,8 @@ async def delete_availability(
 
     if not availability:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Availability slot not found.")
+    if availability.status == "BOOKED":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot modify a patient-booked slot.")
 
     await db.delete(availability)
     await db.commit()
@@ -737,19 +757,8 @@ async def upsert_doctor_availability(
     identity: CurrentIdentity = Depends(get_current_identity),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    # Get the logged-in doctor
-    doctor = (
-        await db.execute(
-            select(Doctor).where(
-                and_(
-                    Doctor.user_id == identity.user_id,
-                    Doctor.deleted_at.is_(None),
-                )
-            )
-        )
-    ).scalar_one_or_none()
-    if doctor is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Doctor profile not found.")
+    # The logged-in doctor, or the doctor support staff is acting for
+    doctor = await _doctor_for_slot_change(db, identity, payload.doctor_id)
 
     try:
         slot_time = parse_client_datetime(payload.slot)

@@ -7,7 +7,7 @@
 import React, { useState, useEffect } from "react";
 import { api } from "../../api";
 import { useAuthContext } from "../../contexts/AuthContext";
-import { parseErrorMessage, parseServerDate } from "../../utils";
+import { parseErrorMessage, parseServerDate, searchQueryProblem } from "../../utils";
 import { LabeledField } from "../common/LabeledField";
 import type { SessionState, PatientSearchRow } from "../../types";
 
@@ -364,8 +364,9 @@ export function SearchPatientsPage({ auth, appointments }: SearchPatientsPagePro
       return;
     }
 
-    if (query.trim().length < 2) {
-      setError("Please enter at least 2 characters to search.");
+    const problem = searchQueryProblem(query, "a patient name");
+    if (problem) {
+      setError(problem);
       return;
     }
 
@@ -399,7 +400,7 @@ export function SearchPatientsPage({ auth, appointments }: SearchPatientsPagePro
         <LabeledField 
           id="doctor-search" 
           label="Search Patient by Name" 
-          helpText="Use at least first 2 letters of patient name." 
+          helpText="Use at least first 2 letters of patient name, or * to list every patient." 
           value={query} 
           onChange={setQuery} 
           error={error} 

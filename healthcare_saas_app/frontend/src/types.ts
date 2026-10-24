@@ -1,4 +1,4 @@
-export type Role = "GUEST" | "PATIENT" | "DOCTOR" | "ADMIN";
+export type Role = "GUEST" | "PATIENT" | "DOCTOR" | "ADMIN" | "SUPPORT_STAFF";
 
 export interface SessionState {
   accessToken: string;
@@ -29,6 +29,59 @@ export interface AppointmentRow {
   status?: string;
   note?: string;
   [key: string]: any;
+}
+
+/** A patient search hit for support staff (GET /support/patients) - contact details only. */
+export interface SupportPatientRow {
+  id: string;
+  name: string;
+  phone: string;
+  email: string;
+  date_of_birth: string;
+  gender: string;
+  insurance_provider: string;
+  city: string;
+  state: string;
+}
+
+/** A user found on the admin Reset Password / Email screen (GET /admin/users/search). */
+export interface AdminUserSearchRow {
+  user_id: string;
+  role: string;
+  name: string;
+  email: string;
+  phone: string;
+  /** Patients only; "" for other roles. */
+  address: string;
+  date_of_birth: string;
+  /** Doctors only. */
+  specialty: string;
+  /** False once an admin deactivates the account (it can't log in). */
+  is_active: boolean;
+  /** True for the admin doing the search (who can't deactivate themselves). */
+  is_self: boolean;
+}
+
+/** A doctor search hit for support staff (GET /support/doctors). */
+export interface SupportDoctorRow {
+  id: string;
+  name: string;
+  phone: string;
+  email: string;
+  specialty: string;
+  license_number: string;
+}
+
+/** An appointment as listed for support staff (GET /support/appointments). */
+export interface SupportAppointmentRow {
+  id: string;
+  appointment_time: string;
+  status: string;
+  reason: string;
+  patient_id: string;
+  patient_name: string;
+  doctor_id: string;
+  doctor_name: string;
 }
 
 export interface DoctorAppointmentRow {

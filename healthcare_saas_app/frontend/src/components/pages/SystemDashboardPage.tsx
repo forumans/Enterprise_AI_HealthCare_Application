@@ -143,6 +143,21 @@ export function SystemDashboardPage({ auth, userData }: SystemDashboardPageProps
             <h3 style={{ margin: '0 0 16px 0', color: '#eaf5ff' }}>Quick Actions</h3>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '12px' }}>
               <button
+                onClick={() => navigate('/admin/register-support-staff')}
+                style={{
+                  background: '#f0a020',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  padding: '12px 16px',
+                  fontSize: '14px',
+                  cursor: 'pointer',
+                  fontWeight: '500'
+                }}
+              >
+                Register New Support Staff
+              </button>
+              <button
                 onClick={() => navigate('/admin/register-doctor')}
                 style={{
                   background: '#42b5f5',

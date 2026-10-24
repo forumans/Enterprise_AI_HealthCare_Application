@@ -200,6 +200,10 @@ psql -h your-rds-endpoint -U healthcare_user -d healthcare_db -f migrations/001_
 5. Run `migrations/004_backfill_evening_availability_slots.sql` to add 5 PM–11 PM slots for doctors who already have upcoming 8 AM–4 PM slots (idempotent).
 6. Once the app is verified, `DROP SCHEMA tz_migration_backup CASCADE;`. Until then, `003_convert_timestamps_to_timestamptz_rollback.sql` reverts the column types (deploy the previous backend with it).
 
+### Migration 005: Support Staff role
+
+`005_add_support_staff_role.sql` adds `SUPPORT_STAFF` to the `user_role` enum and creates the `support_staff` table. Run it **before** deploying the backend that includes the Support Staff feature (`psql -v ON_ERROR_STOP=1 -f migrations/005_add_support_staff_role.sql`). It is idempotent, and older backends ignore the new enum value and table. Enum values can't be dropped in PostgreSQL, so there is no rollback script.
+
 RDS is in a private subnet, so `psql` needs a path into the VPC (SSM port-forward through a bastion, or a temporary bastion host) — it cannot be reached directly from a dev machine.
 
 ---

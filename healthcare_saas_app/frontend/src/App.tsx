@@ -53,6 +53,9 @@ import {
 import { 
   AdminResetPasswordPage 
 } from "./components/pages/AdminResetPasswordPage";
+import {
+  AdminDeactivatePage
+} from "./components/pages/AdminDeactivatePage";
 import { 
   AdminRegistrationPage 
 } from "./components/pages/AdminRegistrationPage";
@@ -62,8 +65,17 @@ import {
 import { 
   AdminRegisterDoctorPage 
 } from "./components/pages/AdminRegisterDoctorPage";
-import { 
-  useAppointments, 
+import {
+  SupportAppointmentsPage
+} from "./components/pages/SupportAppointmentsPage";
+import {
+  SupportDoctorAvailabilityPage
+} from "./components/pages/SupportDoctorAvailabilityPage";
+import {
+  SupportProfilePage
+} from "./components/pages/SupportProfilePage";
+import {
+  useAppointments,
   useUserData, 
   useNavigation 
 } from "./hooks";
@@ -134,6 +146,7 @@ function AppContent() {
           <Route path="/patients/login" element={<LoginPage role="PATIENT" />} />
           <Route path="/doctors/login" element={<LoginPage role="DOCTOR" />} />
           <Route path="/admin/login" element={<LoginPage role="ADMIN" />} />
+          <Route path="/support/login" element={<LoginPage role="SUPPORT_STAFF" />} />
           
           {/* Public routes - no authentication required */}
           <Route path="/patients/register" element={<AppLayout session={auth.session} status={auth.status}><PatientRegistrationPage /></AppLayout>} />
@@ -298,8 +311,18 @@ function AppContent() {
               </ProtectedRoute>
             } 
           />
-          <Route 
-            path="/admin/system-dashboard" 
+          <Route
+            path="/admin/register-support-staff"
+            element={
+              <ProtectedRoute allowed={["ADMIN"]} role={auth.session.role}>
+                <AppLayout session={auth.session} status={auth.status}>
+                  <AdminRegistrationPage key="support-staff" auth={auth} role="SUPPORT_STAFF" />
+                </AppLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/system-dashboard"
             element={
               <ProtectedRoute allowed={["ADMIN"]} role={auth.session.role}>
                 <AppLayout session={auth.session} status={auth.status}>
@@ -319,6 +342,60 @@ function AppContent() {
             } 
           />
           
+          {/* Admin: deactivate / activate accounts */}
+          <Route
+            path="/admin/deactivate"
+            element={
+              <ProtectedRoute allowed={["ADMIN"]} role={auth.session.role}>
+                <AppLayout session={auth.session} status={auth.status}>
+                  <AdminDeactivatePage auth={auth} />
+                </AppLayout>
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Support staff routes */}
+          <Route
+            path="/support/patient-appointments"
+            element={
+              <ProtectedRoute allowed={["SUPPORT_STAFF"]} role={auth.session.role}>
+                <AppLayout session={auth.session} status={auth.status}>
+                  <SupportAppointmentsPage key="patient" auth={auth} mode="patient" />
+                </AppLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/support/doctor-appointments"
+            element={
+              <ProtectedRoute allowed={["SUPPORT_STAFF"]} role={auth.session.role}>
+                <AppLayout session={auth.session} status={auth.status}>
+                  <SupportAppointmentsPage key="doctor" auth={auth} mode="doctor" />
+                </AppLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/support/doctor-availability"
+            element={
+              <ProtectedRoute allowed={["SUPPORT_STAFF"]} role={auth.session.role}>
+                <AppLayout session={auth.session} status={auth.status}>
+                  <SupportDoctorAvailabilityPage auth={auth} />
+                </AppLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/support/profile"
+            element={
+              <ProtectedRoute allowed={["SUPPORT_STAFF"]} role={auth.session.role}>
+                <AppLayout session={auth.session} status={auth.status}>
+                  <SupportProfilePage auth={auth} />
+                </AppLayout>
+              </ProtectedRoute>
+            }
+          />
+
           {/* Fallback route */}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

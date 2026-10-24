@@ -123,6 +123,18 @@ export const OFFICE_HOUR_SLOTS: string[] = Array.from(
   }
 );
 
+/** Search text that lists everyone (of the chosen role) on the search screens. */
+export const SEARCH_WILDCARD = "*";
+
+/**
+ * Problem with a people-search query, or "" if it can be sent: at least 2 characters, or "*" for everyone.
+ * @param what - What can be searched, e.g. "a name or phone number"
+ */
+export function searchQueryProblem(query: string, what: string): string {
+  const q = query.trim();
+  return q === SEARCH_WILDCARD || q.length >= 2 ? "" : `Enter at least 2 characters of ${what}, or * to list everyone.`;
+}
+
 /** Length of one booking slot; the grids are hourly. */
 export const SLOT_DURATION_MINUTES = 60;
 

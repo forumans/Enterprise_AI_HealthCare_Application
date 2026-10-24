@@ -18,6 +18,6 @@ class User(Base, SoftDeleteMixin):
     tenant_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
     email: Mapped[str] = mapped_column(String(255), nullable=False)
     password_hash: Mapped[str] = mapped_column(String, nullable=False)
-    role: Mapped[str] = mapped_column(Enum("ADMIN", "DOCTOR", "PATIENT", name="user_role", create_type=False), nullable=False)
+    role: Mapped[str] = mapped_column(Enum("ADMIN", "DOCTOR", "PATIENT", "SUPPORT_STAFF", name="user_role", create_type=False), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("TRUE"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"), nullable=False)

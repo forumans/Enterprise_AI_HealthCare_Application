@@ -57,6 +57,7 @@ class TempDatabase:
             await conn.close()
         if migrate:
             await self.run_migration("003_convert_timestamps_to_timestamptz.sql")
+            await self.run_migration("005_add_support_staff_role.sql")
         return self
 
     @property

@@ -32,13 +32,15 @@ interface AuthContextType {
   setStatus: React.Dispatch<React.SetStateAction<string>>;
   setLoginForm: React.Dispatch<React.SetStateAction<{ email: string; password: string }>>;
   setPatientRegistration: React.Dispatch<React.SetStateAction<any>>;
-  handleLogin: (target: "PATIENT" | "DOCTOR" | "ADMIN") => Promise<void>;
+  handleLogin: (target: LoginRole) => Promise<void>;
   handleLogout: () => void;
   registerPatient: () => Promise<void>;
   checkRole: (requiredRoles: string[]) => string | null;
   resetLoginForm: () => void;
   resetPatientRegistration: () => void;
 }
+
+export type LoginRole = "PATIENT" | "DOCTOR" | "ADMIN" | "SUPPORT_STAFF";
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
@@ -115,7 +117,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [session, pendingNavigation, navigate]);
 
   // Handle login
-  async function handleLogin(target: "PATIENT" | "DOCTOR" | "ADMIN") {
+  async function handleLogin(target: LoginRole) {
     debugLog("Auth login requested for role:", target);
     
     try {
@@ -162,6 +164,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setPendingNavigation("/patients/appointments");
         } else if (target === "DOCTOR") {
           setPendingNavigation("/doctors/appointments");
+        } else if (target === "SUPPORT_STAFF") {
+          setPendingNavigation("/support/patient-appointments");
         } else {
           setPendingNavigation("/admin/system-dashboard");
         }

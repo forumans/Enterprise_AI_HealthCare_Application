@@ -13,6 +13,7 @@ from .medical_records import router as medical_records_router
 from .patient import router as patient_router
 from .patients import router as patients_router
 from .prescriptions import router as prescriptions_router
+from .support import router as support_router
 from .tenants import router as tenants_router
 from .users import router as users_router
 
@@ -27,6 +28,7 @@ api_router.include_router(doctor_router, tags=["doctor"])
 api_router.include_router(appointments_router, tags=["appointments"])
 api_router.include_router(medical_records_router, tags=["medical-records"])
 api_router.include_router(prescriptions_router, tags=["prescriptions"])
+api_router.include_router(support_router, tags=["support"])
 api_router.include_router(admin_router, tags=["admin"])
 api_router.include_router(admin_password_reset_router, prefix="/admin", tags=["admin-password-reset"])
 api_router.include_router(audit_router, tags=["audit-logs"])

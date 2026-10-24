@@ -10,8 +10,17 @@ import { useAuthContext } from "../../contexts/AuthContext";
 import { OFFICE_HOUR_SLOTS, parseErrorMessage, parseServerDate } from "../../utils";
 import type { SessionState } from "../../types/app";
 
+export interface AvailabilityDoctor {
+  id: string;
+  name: string;
+  specialty?: string | null;
+  license_number?: string | null;
+}
+
 interface ManageAvailabilityPageProps {
   auth: any;
+  /** Doctor to manage on behalf of (support staff). Omitted: the logged-in doctor. */
+  doctor?: AvailabilityDoctor;
 }
 
 // DoctorDetails component (same as in TodayAppointmentsPage)
@@ -63,7 +72,7 @@ function DoctorDetails({ session, auth }: { session: SessionState; auth: any }) 
   );
 }
 
-export function ManageAvailabilityPage({ auth }: ManageAvailabilityPageProps) {
+export function ManageAvailabilityPage({ auth, doctor }: ManageAvailabilityPageProps) {
   const [weekOffset, setWeekOffset] = useState(0);
   const [availability, setAvailability] = useState<Array<{ slot_time: string; status: "AVAILABLE" | "BOOKED" | "BLOCKED" }>>([]);
   const [loading, setLoading] = useState(false);
@@ -85,7 +94,7 @@ export function ManageAvailabilityPage({ auth }: ManageAvailabilityPageProps) {
     if (auth.session.accessToken) {
       loadAvailability();
     }
-  }, [weekOffset, auth.session.accessToken]);
+  }, [weekOffset, auth.session.accessToken, doctor?.id]);
 
   async function loadAvailability() {
     if (!auth.session.accessToken) {
@@ -96,12 +105,12 @@ export function ManageAvailabilityPage({ auth }: ManageAvailabilityPageProps) {
     
     setLoading(true);
     try {
-      // Get current doctor's information
-      const doctor = await api.getDoctorMe(auth.session.accessToken);
-      setCurrentDoctor(doctor);
+      // The doctor being managed: given by support staff, or the logged-in doctor
+      const target = doctor ?? await api.getDoctorMe(auth.session.accessToken);
+      setCurrentDoctor(target);
       
-      // Fetch all availability for the current doctor
-      const availabilityResponse = await api.listAllDoctorAvailability(doctor.id, auth.session.accessToken);
+      // Fetch all availability for that doctor
+      const availabilityResponse = await api.listAllDoctorAvailability(target.id, auth.session.accessToken);
       setAvailability(availabilityResponse);
     } catch (error) {
       console.error("Failed to load availability:", error);
@@ -195,9 +204,20 @@ export function ManageAvailabilityPage({ auth }: ManageAvailabilityPageProps) {
 
   return (
     <section style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-      <h2>Manage Availability</h2>
+      {!doctor && <h2>Manage Availability</h2>}
       
-      <DoctorDetails session={auth.session} auth={auth} />
+      {doctor ? (
+        <div className="card" style={{ padding: '20px' }}>
+          <h3>Doctor Details</h3>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
+            <div><strong>Name:</strong> {doctor.name}</div>
+            <div><strong>Specialization:</strong> {doctor.specialty || 'N/A'}</div>
+            <div><strong>License Number:</strong> {doctor.license_number || 'N/A'}</div>
+          </div>
+        </div>
+      ) : (
+        <DoctorDetails session={auth.session} auth={auth} />
+      )}
       
       <div className="card" style={{ padding: '20px' }}>
         <div className="calendar-nav" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>

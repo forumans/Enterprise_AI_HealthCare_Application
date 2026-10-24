@@ -5,7 +5,7 @@ This middleware enforces the multi-tenant contract from
 
 - tenant context is resolved from JWT claim ``tenant_id``
 - user identity includes ``user_id`` and ``role``
-- valid roles match DB enum `user_role` (ADMIN, DOCTOR, PATIENT)
+- valid roles match DB enum `user_role` (ADMIN, DOCTOR, PATIENT, SUPPORT_STAFF)
 - request context is isolated per request (no cross-request leakage)
 
 Industry best-practice behavior implemented here:
@@ -32,7 +32,7 @@ from starlette.requests import Request
 
 from .request_context import RequestContext, reset_request_context, set_request_context
 
-ROLE_ENUM = {"ADMIN", "DOCTOR", "PATIENT"}
+ROLE_ENUM = {"ADMIN", "DOCTOR", "PATIENT", "SUPPORT_STAFF"}
 
 
 def extract_bearer_token(authorization: str | None) -> Optional[str]:

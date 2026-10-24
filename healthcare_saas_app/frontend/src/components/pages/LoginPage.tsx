@@ -10,10 +10,10 @@ import { LabeledField } from "../common/LabeledField";
 import { StatusMessage } from "../common/StatusMessage";
 import { useAuthContext } from "../../contexts/AuthContext";
 import { validateEmail } from "../../utils";
-import type { Role } from "../../types/app";
+import type { LoginRole } from "../../contexts/AuthContext";
 
 interface LoginPageProps {
-  role: "PATIENT" | "DOCTOR" | "ADMIN";
+  role: LoginRole;
 }
 
 export function LoginPage({ role }: LoginPageProps) {
@@ -47,6 +47,13 @@ export function LoginPage({ role }: LoginPageProps) {
           subtitle: "System administration and management",
           registerLink: "/admin/register-admin",
           registerText: "First time setup? Register admin"
+        };
+      case "SUPPORT_STAFF":
+        return {
+          title: "Support Staff Login",
+          subtitle: "Manage appointments and availability on behalf of patients and doctors",
+          registerLink: null,
+          registerText: "Support staff accounts are created by an administrator"
         };
     }
   };
@@ -135,14 +142,18 @@ export function LoginPage({ role }: LoginPageProps) {
           className="button-primary"
           disabled={!loginForm.email || !loginForm.password || !!emailError}
         >
-          Login as {role.charAt(0) + role.slice(1).toLowerCase()}
+          Login as {role === "SUPPORT_STAFF" ? "Support Staff" : role.charAt(0) + role.slice(1).toLowerCase()}
         </button>
       </form>
 
       <div style={{ marginTop: '24px', textAlign: 'center' }}>
-        <Link to={content.registerLink} style={{ color: '#42b5f5' }}>
-          {content.registerText}
-        </Link>
+        {content.registerLink ? (
+          <Link to={content.registerLink} style={{ color: '#42b5f5' }}>
+            {content.registerText}
+          </Link>
+        ) : (
+          <span style={{ color: '#b4cce2' }}>{content.registerText}</span>
+        )}
       </div>
     </section>
   );

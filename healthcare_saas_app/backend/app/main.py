@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer
 from sqlalchemy.exc import SQLAlchemyError
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from .api.routes import api_router
 from .api.health import router as health_router
@@ -35,6 +36,23 @@ def _configure_logging() -> logging.Logger:
         handlers=[logging.StreamHandler()],
     )
     return logging.getLogger("healthcare.app")
+
+
+SERVER_ERROR_DETAIL = "Something went wrong on the server. Please try again, or contact support if it keeps happening."
+
+
+async def catch_unhandled_errors(request: Request, call_next):
+    """Turn an unexpected exception into a JSON 500.
+
+    Registered just inside CORSMiddleware: Starlette's own last-resort 500 is produced outside
+    every middleware, so it carries no CORS headers and browsers report it as "Failed to fetch".
+    This response passes back through CORS, so the frontend can show the real error.
+    """
+    try:
+        return await call_next(request)
+    except Exception:
+        logging.getLogger("healthcare.app").exception("Unhandled error on %s %s", request.method, request.url.path)
+        return JSONResponse(status_code=500, content={"detail": SERVER_ERROR_DETAIL})
 
 
 def create_app() -> FastAPI:
@@ -84,19 +102,19 @@ def create_app() -> FastAPI:
             "/api/auth/forgot-password",
             "/auth/reset-password",
             "/api/auth/reset-password",
-            "/doctors",
-            "/api/doctors",
+            # Not /doctors: listing doctors needs the caller's clinic, so it must read the token.
+            # (An excluded path skips token decoding, so even logged-in calls would get 401.)
             "/doctors/register",
             "/api/doctors/register",
             "/admin/register",
             "/api/admin/register",
-            "/doctor/availability/{doctor_id}/ndays",
-            "/api/doctor/availability/{doctor_id}/ndays",
         },
         excluded_prefixes=(),
     )
     app.add_middleware(AuditContextMiddleware)
-    
+    # Inside CORS (added just before it), so server errors still get CORS headers
+    app.add_middleware(BaseHTTPMiddleware, dispatch=catch_unhandled_errors)
+
     # CORS is required so browser clients (React) can call FastAPI.
     # Add CORS middleware last to ensure it handles all requests
     app.add_middleware(

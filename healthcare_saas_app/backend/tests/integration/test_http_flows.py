@@ -247,6 +247,12 @@ class HttpFlowTests(unittest.TestCase):
         # Unauthenticated calls are rejected outright
         self.assertEqual(self.call("GET", "/support/patients?q=*")[0], 401)
 
+        # The doctor list needs a login - and works for logged-in users of every role (it backs the
+        # patient booking screen; a 401 here would sign the user out)
+        self.assertEqual(self.call("GET", "/doctors")[0], 401)
+        for token in (patient, staff, doctor2):
+            self.assertEqual([d["name"] for d in self.ok("GET", "/doctors", token)], ["Dr One", "Dr Two"])
+
     def test_admin_account_management_end_to_end(self):
         admin = self.login("admin@http.test")
         self.register_staff(admin, "acct@http.test", "Alex Account")

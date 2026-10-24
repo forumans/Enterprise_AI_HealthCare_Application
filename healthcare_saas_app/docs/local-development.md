@@ -214,7 +214,13 @@ npx playwright show-report
 - **Slots:** 8 AM–11 PM default generation, including across daylight-saving changes; the rolling 7-day top-up; and concurrent loads.
 - **Appointments:** book → cancel → rebook through the booking trigger, double-booking rejection, and the clinic-local "today" and week views.
 - **Reschedule & cancel:** patients and doctors moving an appointment (details and status kept, old slot freed, audit logged); rejection of taken, past, same-time, completed and cross-doctor double-booked slots; ownership checks; and patients/doctors cancelling confirmed appointments.
+- **Support staff:** registration, profile, patient/doctor search (name, phone, `*`), booking/updating/rescheduling/cancelling on behalf of patients and doctors, and blocking/unblocking doctors' slots.
+- **Admin accounts:** role-based user search, changing login email and resetting password by user id, deactivating/activating (no self-deactivation, at least one active admin), and soft delete.
+- **Permissions:** who may change which appointments and slots; booked slots can't be blocked or deleted.
 - **Migration 004:** the evening-slot backfill.
+- **End-to-end HTTP (`test_http_flows.py`):** starts the real backend with uvicorn on a free local port and drives the support staff, admin account and permission flows through login, JWTs, middleware and role guards.
+
+Database-free unit tests (always run) cover route role guards (`test_role_access.py`), the shared search helper and request validation (`test_search_and_validation.py`), and route registration.
 
 They are **skipped** unless `HC_TEST_PG_ADMIN_URL` points at a *disposable* server. Each test creates its own `hc_it_<random>` database from `baseline_schema_pre_003.sql` and drops it afterwards, so never point it at a server holding data you care about:
 

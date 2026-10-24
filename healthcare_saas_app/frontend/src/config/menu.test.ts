@@ -19,6 +19,12 @@ describe("Support Staff menu", () => {
     ]);
   });
 
+  it("lists System Dashboard first in the Admin menu after login", () => {
+    const afterLogin = submenuMap.Admin.filter(i => !i.hideWhenAuth);
+    expect(afterLogin[0]).toEqual(expect.objectContaining({ to: "/admin/system-dashboard", label: "System Dashboard" }));
+    expect(afterLogin.map(i => i.label)).toContain("Reset Password / Email");
+  });
+
   it("gives admins a Deactivate screen", () => {
     expect(submenuMap.Admin).toContainEqual(
       expect.objectContaining({ to: "/admin/deactivate", label: "Deactivate", requiresAuth: true, role: "ADMIN" })

@@ -41,10 +41,12 @@ from backend.app.api.routes.appointments import (
     update_appointment,
 )
 from backend.app.api.routes.doctor import (
+    DeleteAvailabilityRequest,
     UpsertAvailabilityRequest,
     UpsertDoctorAvailabilityRequest,
     doctor_all_appointments,
     doctor_appointments_today,
+    delete_availability,
     upsert_availability,
     upsert_doctor_availability,
 )
@@ -857,6 +859,41 @@ class CoreFlowTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await conn.close()
         self.assertEqual([a["active"] for a in audits], ["false", "true"])
+
+    async def test_slot_delete_respects_ownership_and_bookings_and_past_bookings_fail(self):
+        await self._register_support_staff()
+        async with self.sessions() as s:
+            await ensure_default_slots(s, await self.doctor(s))
+        other_doctor = await self._second_doctor()
+        day = timeutils.clinic_today() + timedelta(days=2)
+        booked, free = local(day, 9), local(day, 11)
+        await self._book("patient1", booked)
+
+        async def delete(doctor_id: str, identity, when: datetime) -> dict:
+            async with self.sessions() as s:
+                return await delete_availability(doctor_id=doctor_id, payload=DeleteAvailabilityRequest(slot_time=when.isoformat()), identity=identity, db=s)
+
+        cases = [
+            (self.ids["doctor"], self.identity("patient1", "PATIENT"), free, 403),
+            (other_doctor, self.identity("doctor", "DOCTOR"), free, 403),  # another doctor's slots
+            (self.ids["doctor"], self.identity("doctor", "DOCTOR"), booked, 400),  # patient-booked slot
+        ]
+        for doctor_id, identity, when, expected in cases:
+            with self.subTest(expected=expected, role=identity.role):
+                with self.assertRaises(HTTPException) as ctx:
+                    await delete(doctor_id, identity, when)
+                self.assertEqual(ctx.exception.status_code, expected)
+
+        await delete(self.ids["doctor"], self.staff(), free)  # support staff may remove a free slot
+        remaining = {r["slot_time"] for r in await self.slots()}
+        self.assertNotIn(free, remaining)
+        self.assertIn(booked, remaining)
+
+        past = CreateAppointmentRequest(doctor_id=self.ids["doctor"], slot=(timeutils.utc_now() - timedelta(hours=2)).isoformat(), reason="Too late now")
+        async with self.sessions() as s:
+            with self.assertRaises(HTTPException) as ctx:
+                await create_appointment(payload=past, identity=self.identity("patient1", "PATIENT"), db=s)
+        self.assertEqual(ctx.exception.status_code, 400)
 
     async def test_star_lists_everyone_of_the_role_on_every_search(self):
         await self._register_support_staff()

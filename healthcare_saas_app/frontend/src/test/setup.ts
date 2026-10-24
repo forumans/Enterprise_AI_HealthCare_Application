@@ -9,5 +9,6 @@ import { afterEach, vi } from "vitest";
 
 afterEach(() => {
   cleanup();
-  vi.restoreAllMocks();
+  vi.restoreAllMocks(); // undo vi.spyOn (window.confirm, alert, ...)
+  vi.clearAllMocks(); // forget calls to module mocks, so "not called" checks start fresh
 });

@@ -8,14 +8,15 @@ share the same logic.
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, or_
+from sqlalchemy import select, and_
 from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, validator
 
 from ...core.database import get_db
 from ...core.dependencies import CurrentIdentity, require_roles
 from ...core.security import hash_password
-from ...models import Admin, Doctor, Patient, SupportStaff, User
+from ...models import User
+from ...services.account_service import EMAIL_TAKEN, PROFILE_MODELS, ensure_email_available
 from ...services.audit_service import write_audit_log
 from ..search_utils import name_phone_or_email_matches, search_limit
 
@@ -73,8 +74,6 @@ RESETTABLE_ROLES = [
     ("ADMIN", "Admin"),
 ]
 
-# Profile table holding each role's name and phone
-PROFILE_MODELS = {"PATIENT": Patient, "DOCTOR": Doctor, "SUPPORT_STAFF": SupportStaff, "ADMIN": Admin}
 
 
 def _require_valid_role(role: str) -> None:
@@ -146,18 +145,7 @@ async def _set_email(db: AsyncSession, identity: CurrentIdentity, user: User, ne
     if new_email == old_email:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"The new email ({new_email}) is the same as the current one.")
 
-    # Login looks users up by email across all tenants, so the new email must not belong to any
-    # active account anywhere, nor to any account (even deleted) here - (tenant_id, email) is unique.
-    taken = (
-        await db.execute(
-            select(User.id).where(
-                User.email == new_email,
-                or_(User.deleted_at.is_(None), User.tenant_id == identity.tenant_id),
-            ).limit(1)
-        )
-    ).scalar_one_or_none()
-    if taken:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="That email is already used by another account.")
+    await ensure_email_available(db, new_email, identity.tenant_id)
 
     user.email = new_email
     await write_audit_log(
@@ -174,7 +162,7 @@ async def _set_email(db: AsyncSession, identity: CurrentIdentity, user: User, ne
         await db.commit()
     except IntegrityError as exc:  # someone took the email between the check and the commit
         await db.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="That email is already used by another account.") from exc
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=EMAIL_TAKEN) from exc
     return old_email
 
 

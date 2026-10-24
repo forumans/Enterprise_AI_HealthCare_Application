@@ -222,6 +222,8 @@ class HttpFlowTests(unittest.TestCase):
 
         forbidden = [
             ("patient: support-only reason update", "PATCH", f"/appointments/{appointment}", patient, {"reason": "Patient edit attempt"}),
+            ("patient: change an appointment's status", "PATCH", f"/appointments/{appointment}/status", patient, {"status": "COMPLETED"}),
+            ("doctor: another doctor's appointment status", "PATCH", f"/appointments/{appointment}/status", doctor2, {"status": "COMPLETED"}),
             ("patient: support listing", "GET", f"/support/appointments?doctor_id={doctor_id}", patient, None),
             ("patient: support patient search", "GET", "/support/patients?q=*", patient, None),
             ("patient: support profile", "GET", "/support/profile", patient, None),
@@ -270,13 +272,19 @@ class HttpFlowTests(unittest.TestCase):
         self.assertEqual(self.login_status("alex.new@http.test"), 401)
         self.assertEqual(self.call("POST", f"/admin/users/{user_id}/reset-password", admin, {"new_password": "short"})[0], 400)
 
-        # Deactivate / activate, and the self-protection rule
+        # Deactivate / activate, and the self-protection rule. A token issued before deactivation
+        # stops working on the very next request, not when it expires.
+        staff_session = self.login("alex.new@http.test", "Changed4567")
+        self.ok("GET", "/support/profile", staff_session)
         self.assertFalse(self.ok("POST", f"/admin/users/{user_id}/deactivate", admin)["is_active"])
+        status, body = self.call("GET", "/support/profile", staff_session)
+        self.assertEqual((status, body["detail"]), (401, "Your session is no longer valid. Please sign in again."))
         self.assertEqual(self.login_status("alex.new@http.test", "Changed4567"), 401)
         self.assertFalse(self.ok("GET", "/admin/users/search?role=SUPPORT_STAFF&q=alex", admin)[0]["is_active"])
         self.assertEqual(self.call("POST", f"/admin/users/{user_id}/deactivate", admin)[0], 400)  # already deactivated
         self.assertTrue(self.ok("POST", f"/admin/users/{user_id}/activate", admin)["is_active"])
         self.assertEqual(self.login_status("alex.new@http.test", "Changed4567"), 200)
+        self.ok("GET", "/support/profile", staff_session)  # the old session works again once re-activated
         me = next(u for u in self.ok("GET", "/admin/users/search?role=ADMIN&q=*", admin) if u["is_self"])
         self.assertEqual(self.call("POST", f"/admin/users/{me['user_id']}/deactivate", admin)[0], 400)
 

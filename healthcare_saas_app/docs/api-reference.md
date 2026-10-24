@@ -55,7 +55,7 @@ Authentication is via `Authorization: Bearer <token>` header unless marked **Pub
 ---
 
 ### POST `/api/auth/forgot-password`
-**Public** — Request a password reset link.
+**Public** — Email a password reset link to an active account. The link (`<FRONTEND_URL>/reset-password?token=...`) works once and expires after `PASSWORD_RESET_MINUTES` (default 30). The reply is identical whether or not the email is registered. Needs SMTP configured (`SMTP_HOST`, `SMTP_FROM` or `SMTP_USER`); without it nothing is sent.
 
 ```json
 { "email": "user@example.com" }
@@ -64,7 +64,7 @@ Authentication is via `Authorization: Bearer <token>` header unless marked **Pub
 ---
 
 ### POST `/api/auth/reset-password`
-**Public** — Reset password using a reset token.
+**Public** — Set a new password (at least 8 characters) with the token from the reset email. `400` if the link is invalid, expired or already used.
 
 ```json
 { "token": "reset-token", "new_password": "newpassword" }
@@ -75,9 +75,9 @@ Authentication is via `Authorization: Bearer <token>` header unless marked **Pub
 ## Doctors
 
 ### GET `/api/doctors`
-**Public** — List all active doctors.
+**Any logged-in user** — List the active doctors of your clinic (tenant).
 
-**Response `200`:** Array of doctor objects with `id`, `full_name`, `specialty`, `license_number`.
+**Response `200`:** Array of doctor objects with `id`, `name`, `specialty`, `license_number`.
 
 ---
 
@@ -196,20 +196,20 @@ Authentication is via `Authorization: Bearer <token>` header unless marked **Pub
 ---
 
 ### GET `/api/appointments`
-**PATIENT / DOCTOR / ADMIN** — List appointments for the authenticated user.
+**Any logged-in user** — Active appointments you may see: patients and doctors only their own, admins and support staff the whole clinic.
 
 ---
 
 ### GET `/api/appointments/all`
-**ADMIN** — List all appointments across all patients and doctors.
+**Any logged-in user** — Like `GET /api/appointments`, with doctor names and notes; same visibility rules. `/api/appointments/week` applies them too.
 
 ---
 
-### PUT `/api/appointments/{appointment_id}/status`
-**DOCTOR** — Update appointment status.
+### PATCH `/api/appointments/{appointment_id}/status`
+**DOCTOR** (own appointments) / **ADMIN** — Update appointment status, e.g. `COMPLETED` after a consultation. Cancelling isn't done here (`400`); use `DELETE /api/appointments/{appointment_id}`, which also frees the slot.
 
 ```json
-{ "status": "CONFIRMED | COMPLETED | CANCELLED" }
+{ "status": "SCHEDULED | CONFIRMED | COMPLETED" }
 ```
 
 ---

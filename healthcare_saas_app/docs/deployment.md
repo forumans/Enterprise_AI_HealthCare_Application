@@ -200,6 +200,10 @@ psql -h your-rds-endpoint -U healthcare_user -d healthcare_db -f migrations/001_
 5. Run `migrations/004_backfill_evening_availability_slots.sql` to add 5 PM–11 PM slots for doctors who already have upcoming 8 AM–4 PM slots (idempotent).
 6. Once the app is verified, `DROP SCHEMA tz_migration_backup CASCADE;`. Until then, `003_convert_timestamps_to_timestamptz_rollback.sql` reverts the column types (deploy the previous backend with it).
 
+### Password reset email
+
+Self-service password reset sends email over SMTP. Set `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_TLS`, `SMTP_FROM` and `FRONTEND_URL` on the Lambda (keep the SMTP password in Secrets Manager, not in the template). The Lambda runs in a private subnet, so it needs outbound access to the SMTP server (a NAT gateway, or Amazon SES through a VPC endpoint). Without SMTP the endpoint still answers normally but no email is sent; admins can still reset passwords from Admin > Reset Password / Email.
+
 ### Migration 005: Support Staff role
 
 `005_add_support_staff_role.sql` adds `SUPPORT_STAFF` to the `user_role` enum and creates the `support_staff` table. Run it **before** deploying the backend that includes the Support Staff feature (`psql -v ON_ERROR_STOP=1 -f migrations/005_add_support_staff_role.sql`). It is idempotent, and older backends ignore the new enum value and table. Enum values can't be dropped in PostgreSQL, so there is no rollback script.

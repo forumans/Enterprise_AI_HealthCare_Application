@@ -98,7 +98,6 @@ export function AdminRegisterPatientPage({ auth }: AdminRegisterPatientPageProps
     event.preventDefault();
     setSubmitAttempted(true);
     
-    console.log("Patient registration form submitted");
     
     const nextErrors: FieldErrors = {};
     if (fullName.trim().length < 3) {
@@ -125,11 +124,9 @@ export function AdminRegisterPatientPage({ auth }: AdminRegisterPatientPageProps
     
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) {
-      console.log("Form validation failed:", nextErrors);
       return;
     }
     
-    console.log("Form validation passed, calling API...");
     
     try {
       const payload = {
@@ -147,39 +144,26 @@ export function AdminRegisterPatientPage({ auth }: AdminRegisterPatientPageProps
         insurancePolicyNumber: insurancePolicyNumber.trim(),
       };
       
-      console.log("API payload:", payload);
-      console.log("Auth token:", auth.session.accessToken ? "Present" : "Missing");
       
       const result = await api.registerPatientAdmin(payload, auth.session.accessToken);
       
-      console.log("Patient registration successful!");
-      console.log("Full API response:", result);
-      console.log("Response type:", typeof result);
-      console.log("Response keys:", result ? Object.keys(result) : "null/undefined");
-      console.log("result.message:", result?.message);
-      console.log("result.message type:", typeof result?.message);
       
       // Check if result has message property
       if (result && result.message) {
-        console.log("Setting status to:", result.message);
         setStatus(result.message);
       } else if (result && typeof result === 'string') {
-        console.log("Result is a string, setting status to:", result);
         setStatus(result);
       } else {
-        console.log("No message found in response, using default success message");
         setStatus("Patient registration successful!");
       }
       
       // Clear status message after 10 seconds
       setTimeout(() => {
-        console.log("Clearing status message after 10 seconds");
         setStatus("");
       }, 10000); // 10 seconds
       
       // Clear form after successful registration with delay
       setTimeout(() => {
-        console.log("Clearing form after delay");
         setFullName("");
         setEmail("");
         setPhone("");
@@ -196,14 +180,11 @@ export function AdminRegisterPatientPage({ auth }: AdminRegisterPatientPageProps
       }, 3000); // 3 second delay before clearing form
       
     } catch (error) {
-      console.log("Patient registration error:", error);
       const errorMessage = parseErrorMessage(error);
-      console.log("Setting error status to:", errorMessage);
       setStatus(errorMessage);
       
       // Clear error message after 10 seconds
       setTimeout(() => {
-        console.log("Clearing error message after 10 seconds");
         setStatus("");
       }, 10000); // 10 seconds
     }
@@ -218,7 +199,6 @@ export function AdminRegisterPatientPage({ auth }: AdminRegisterPatientPageProps
       
       {status && (
         <>
-          {console.log("Rendering status message:", status)}
           <div 
             className="status" 
             style={{ 

@@ -17,6 +17,7 @@ from ...core.database import get_db
 from ...core.timeutils import utc_now
 from ...core.security import hash_password
 from ...models import Doctor, Patient, User
+from ...services.account_service import ensure_email_available, restore_account
 from ...services.audit_service import write_audit_log
 
 router = APIRouter(prefix="/users")
@@ -44,6 +45,7 @@ async def create_user(
     if role not in {"ADMIN", "DOCTOR", "PATIENT"}:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Role must be ADMIN, DOCTOR, or PATIENT.")
 
+    await ensure_email_available(db, str(payload.email).lower(), identity.tenant_id)
     user = User(
         tenant_id=identity.tenant_id,
         email=str(payload.email).lower(),
@@ -160,21 +162,6 @@ async def restore_user(
     identity: CurrentIdentity = Depends(require_roles("ADMIN")),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    user = (await db.execute(select(User).where(User.id == user_id, User.tenant_id == identity.tenant_id))).scalar_one_or_none()
-    if user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
-
-    user.deleted_at = None
-    user.deleted_by = None
-    await write_audit_log(
-        db,
-        tenant_id=identity.tenant_id,
-        table_name="users",
-        record_id=user.id,
-        action_type="UPDATE",
-        old_data={"deleted": True},
-        new_data={"deleted": False},
-        performed_by=identity.user_id,
-    )
-    await db.commit()
+    """Undo a soft delete: reactivates the login and restores the person's profile."""
+    await restore_account(db, identity, user_id)
     return {"message": "User restored."}

@@ -30,13 +30,29 @@ describe("LoginPage for support staff", () => {
     expect(screen.getByRole("heading", { name: "Support Staff Login" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Login as Support Staff" })).toBeInTheDocument();
     expect(screen.getByText("Support staff accounts are created by an administrator")).toBeInTheDocument();
-    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /register/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Forgot password?" })).toHaveAttribute("href", "/forgot-password");
   });
 
   it("logs in with the SUPPORT_STAFF role", async () => {
     const handleLogin = renderLogin("SUPPORT_STAFF", { email: "sam@clinic.com", password: "Password123" });
     await userEvent.click(screen.getByRole("button", { name: "Login as Support Staff" }));
     expect(handleLogin).toHaveBeenCalledWith("SUPPORT_STAFF");
+  });
+
+  it("explains why the user is back on the login page after the session ended", () => {
+    vi.mocked(useAuthContext).mockReturnValue({ loginForm: { email: "", password: "" }, setLoginForm: vi.fn(), handleLogin: vi.fn(), status: "", setStatus: vi.fn() } as any);
+    render(
+      <MemoryRouter initialEntries={[{ pathname: "/support/login", state: { notice: "Your session has ended. Please sign in again." } }]}>
+        <LoginPage role="SUPPORT_STAFF" />
+      </MemoryRouter>
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("Your session has ended. Please sign in again.");
+  });
+
+  it("shows no notice on a normal visit", () => {
+    renderLogin("SUPPORT_STAFF");
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
   it("still offers doctors a registration link", () => {

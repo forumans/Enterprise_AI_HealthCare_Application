@@ -6,6 +6,7 @@
 
 import React from "react";
 import { Routes, Route, Navigate, useNavigate } from "react-router-dom";
+import { SESSION_ENDED_EVENT } from "./api";
 
 // Import modular components and hooks
 import { 
@@ -56,6 +57,8 @@ import {
 import {
   AdminDeactivatePage
 } from "./components/pages/AdminDeactivatePage";
+import { ForgotPasswordPage } from "./components/pages/ForgotPasswordPage";
+import { ResetPasswordPage } from "./components/pages/ResetPasswordPage";
 import { 
   AdminRegistrationPage 
 } from "./components/pages/AdminRegistrationPage";
@@ -115,6 +118,18 @@ function AppContent() {
     appointments.setSearchRows([]);
   };
 
+  // When the server ends the session, AuthContext signs out and redirects; drop the loaded data too
+  React.useEffect(() => {
+    const clearLoadedData = () => {
+      userData.clearUserData();
+      appointments.setAppointments([]);
+      appointments.setDoctorAppointments([]);
+      appointments.setSearchRows([]);
+    };
+    window.addEventListener(SESSION_ENDED_EVENT, clearLoadedData);
+    return () => window.removeEventListener(SESSION_ENDED_EVENT, clearLoadedData);
+  }, []);
+
   // Handle login route clearing
   React.useEffect(() => {
     if (window.location.pathname.includes("/login")) {
@@ -147,6 +162,10 @@ function AppContent() {
           <Route path="/doctors/login" element={<LoginPage role="DOCTOR" />} />
           <Route path="/admin/login" element={<LoginPage role="ADMIN" />} />
           <Route path="/support/login" element={<LoginPage role="SUPPORT_STAFF" />} />
+
+          {/* Self-service password reset (public) */}
+          <Route path="/forgot-password" element={<AppLayout session={auth.session} status={auth.status}><ForgotPasswordPage /></AppLayout>} />
+          <Route path="/reset-password" element={<AppLayout session={auth.session} status={auth.status}><ResetPasswordPage /></AppLayout>} />
           
           {/* Public routes - no authentication required */}
           <Route path="/patients/register" element={<AppLayout session={auth.session} status={auth.status}><PatientRegistrationPage /></AppLayout>} />

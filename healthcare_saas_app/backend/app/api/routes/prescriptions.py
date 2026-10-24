@@ -94,7 +94,6 @@ async def get_pharmacies(
             for pharmacy in pharmacies
         ]
     except Exception as e:
-        print(f"Error fetching pharmacies: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch pharmacies")
 
 

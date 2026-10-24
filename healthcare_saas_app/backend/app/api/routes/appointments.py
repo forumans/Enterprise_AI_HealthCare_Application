@@ -42,6 +42,52 @@ def _week_bounds(from_date: date | None) -> tuple[datetime, datetime]:
     return clinic_week_bounds(from_date or clinic_today())
 
 
+async def _own_doctor_id(db: AsyncSession, identity: CurrentIdentity) -> str | None:
+    """Doctor profile id of the logged-in doctor (None if they have none in this tenant)."""
+    return (
+        await db.execute(
+            select(Doctor.id).where(
+                Doctor.user_id == identity.user_id,
+                Doctor.tenant_id == identity.tenant_id,
+                Doctor.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def _own_patient_id(db: AsyncSession, identity: CurrentIdentity) -> str | None:
+    """Patient profile id of the logged-in patient (None if they have none in this tenant)."""
+    return (
+        await db.execute(
+            select(Patient.id).where(
+                Patient.user_id == identity.user_id,
+                Patient.tenant_id == identity.tenant_id,
+                Patient.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+
+
+def _scope_to_caller(stmt, identity: CurrentIdentity, own_id: str | None):
+    """Limit an appointment query to what the caller may see: patients their own, doctors their own,
+    admins and support staff the whole tenant. Returns None when the caller has no profile to scope by."""
+    role = (identity.role or "").upper()
+    if role in ("ADMIN", "SUPPORT_STAFF"):
+        return stmt
+    if own_id is None:
+        return None
+    return stmt.where(Appointment.patient_id == own_id) if role == "PATIENT" else stmt.where(Appointment.doctor_id == own_id)
+
+
+async def _caller_profile_id(db: AsyncSession, identity: CurrentIdentity) -> str | None:
+    role = (identity.role or "").upper()
+    if role == "PATIENT":
+        return await _own_patient_id(db, identity)
+    if role == "DOCTOR":
+        return await _own_doctor_id(db, identity)
+    return None
+
+
 @router.post("/appointments", status_code=status.HTTP_201_CREATED)
 async def create_appointment(
     payload: CreateAppointmentRequest,
@@ -102,10 +148,14 @@ async def list_appointments(
     identity: CurrentIdentity = Depends(get_current_identity),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    stmt = select(Appointment).where(
-        Appointment.tenant_id == identity.tenant_id,
-        Appointment.deleted_at.is_(None),
+    """Active appointments the caller may see (own for patients/doctors, the tenant's for staff/admins)."""
+    stmt = _scope_to_caller(
+        select(Appointment).where(Appointment.tenant_id == identity.tenant_id, Appointment.deleted_at.is_(None)),
+        identity,
+        await _caller_profile_id(db, identity),
     )
+    if stmt is None:
+        return []
     rows = (await db.execute(stmt)).scalars().all()
     return [
         {
@@ -130,20 +180,10 @@ async def list_all_appointments(
         Appointment.deleted_at.is_(None),
     )
 
-    role = (identity.role or "").upper()
-    if role == "PATIENT":
-        patient = (
-            await db.execute(
-                select(Patient).where(
-                    Patient.user_id == identity.user_id,
-                    Patient.tenant_id == identity.tenant_id,
-                    Patient.deleted_at.is_(None),
-                )
-            )
-        ).scalar_one_or_none()
-        if patient is None:
-            return []
-        stmt = stmt.where(Appointment.patient_id == patient.id)
+    # Patients and doctors see only their own appointments; admins and support staff the tenant's
+    stmt = _scope_to_caller(stmt, identity, await _caller_profile_id(db, identity))
+    if stmt is None:
+        return []
 
     rows = (await db.execute(stmt.order_by(Appointment.appointment_time.asc()))).scalars().all()
     
@@ -187,20 +227,10 @@ async def list_weekly_appointments(
         Appointment.deleted_at.is_(None),
     )
 
-    role = (identity.role or "").upper()
-    if role == "PATIENT":
-        patient = (
-            await db.execute(
-                select(Patient).where(
-                    Patient.user_id == identity.user_id,
-                    Patient.tenant_id == identity.tenant_id,
-                    Patient.deleted_at.is_(None),
-                )
-            )
-        ).scalar_one_or_none()
-        if patient is None:
-            return []
-        stmt = stmt.where(Appointment.patient_id == patient.id)
+    # Patients and doctors see only their own appointments; admins and support staff the tenant's
+    stmt = _scope_to_caller(stmt, identity, await _caller_profile_id(db, identity))
+    if stmt is None:
+        return []
 
     rows = (await db.execute(stmt.order_by(Appointment.appointment_time.asc()))).scalars().all()
     
@@ -234,11 +264,18 @@ async def list_weekly_appointments(
 async def update_appointment_status(
     appointment_id: str,
     payload: UpdateAppointmentStatusRequest,
-    identity: CurrentIdentity = Depends(get_current_identity),
+    identity: CurrentIdentity = Depends(require_roles("DOCTOR", "ADMIN")),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    """Set an appointment's status (e.g. COMPLETED after a consultation).
+
+    Doctors may change only their own appointments; admins any in the tenant. Cancelling goes
+    through DELETE /appointments/{id}, which also soft-deletes the record and frees the slot.
+    """
     next_status = payload.status.upper().strip()
-    if next_status not in {"SCHEDULED", "CONFIRMED", "CANCELLED", "COMPLETED"}:
+    if next_status == "CANCELLED":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Use DELETE /appointments/{id} to cancel an appointment.")
+    if next_status not in {"SCHEDULED", "CONFIRMED", "COMPLETED"}:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid appointment status.")
 
     row = (
@@ -252,6 +289,8 @@ async def update_appointment_status(
     ).scalar_one_or_none()
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Appointment not found.")
+    if (identity.role or "").upper() == "DOCTOR" and await _own_doctor_id(db, identity) != row.doctor_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to change this appointment.")
 
     old_status = row.status
     row.status = next_status

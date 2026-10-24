@@ -5,7 +5,7 @@
  */
 
 import React from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { LabeledField } from "../common/LabeledField";
 import { StatusMessage } from "../common/StatusMessage";
 import { useAuthContext } from "../../contexts/AuthContext";
@@ -18,6 +18,8 @@ interface LoginPageProps {
 
 export function LoginPage({ role }: LoginPageProps) {
   const { loginForm, setLoginForm, handleLogin, status, setStatus } = useAuthContext();
+  // Set when the user was signed out because the server ended their session
+  const notice = (useLocation().state as { notice?: string } | null)?.notice ?? "";
   const [submitAttempted, setSubmitAttempted] = React.useState(false);
 
   // Clear any existing status messages when navigating to login page
@@ -62,26 +64,20 @@ export function LoginPage({ role }: LoginPageProps) {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    console.log('🔍 DEBUG: Form submitted for role:', role);
-    console.log('🔍 DEBUG: Email:', loginForm.email);
-    console.log('🔍 DEBUG: Password length:', loginForm.password.length);
     
     setSubmitAttempted(true);
     
     // Validate email
     if (!validateEmail(loginForm.email)) {
-      console.log('🔍 DEBUG: Email validation failed');
       return; // Email validation will be handled by the form
     }
     
     // Validate password (minimum 8 characters required)
     if (loginForm.password.length < 8) {
-      console.log('🔍 DEBUG: Password validation failed');
       setStatus("Password must be at least 8 characters.");
       return;
     }
     
-    console.log('🔍 DEBUG: Validation passed, calling handleLogin');
     handleLogin(role);
   };
 
@@ -95,6 +91,19 @@ export function LoginPage({ role }: LoginPageProps) {
       <p style={{ color: '#b4cce2', marginBottom: '24px' }}>
         {content.subtitle}
       </p>
+
+      {notice && !status && (
+        <div role="status" style={{
+          padding: '12px 14px',
+          margin: '0 0 16px 0',
+          borderRadius: '6px',
+          borderLeft: '4px solid #f0a020',
+          backgroundColor: 'rgba(240, 160, 32, 0.12)',
+          color: '#ffd28a'
+        }}>
+          {notice}
+        </div>
+      )}
       
       {status && (
         <StatusMessage 
@@ -146,7 +155,11 @@ export function LoginPage({ role }: LoginPageProps) {
         </button>
       </form>
 
-      <div style={{ marginTop: '24px', textAlign: 'center' }}>
+      <div style={{ marginTop: '16px', textAlign: 'center' }}>
+        <Link to="/forgot-password" style={{ color: '#42b5f5' }}>Forgot password?</Link>
+      </div>
+
+      <div style={{ marginTop: '12px', textAlign: 'center' }}>
         {content.registerLink ? (
           <Link to={content.registerLink} style={{ color: '#42b5f5' }}>
             {content.registerText}

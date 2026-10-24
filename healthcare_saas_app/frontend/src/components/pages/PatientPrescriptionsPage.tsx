@@ -51,7 +51,6 @@ export function PatientPrescriptionsPage({ auth }: PatientPrescriptionsPageProps
       }
 
       try {
-        console.log('🔍 DEBUG: Loading patient prescriptions using /patient/prescriptions-full endpoint...');
         
         // Fetch patient information and prescriptions in parallel
         const [patientData, prescriptionsData] = await Promise.all([
@@ -59,13 +58,8 @@ export function PatientPrescriptionsPage({ auth }: PatientPrescriptionsPageProps
           api.patientPrescriptionsFull(auth.session.accessToken)
         ]);
         
-        console.log('🔍 DEBUG: Patient data received:', patientData);
-        console.log('🔍 DEBUG: Patient prescriptions data received:', prescriptionsData);
-        console.log('🔍 DEBUG: Number of prescriptions:', prescriptionsData.length);
         
         if (prescriptionsData.length > 0) {
-          console.log('🔍 DEBUG: First prescription full structure:', JSON.stringify(prescriptionsData[0], null, 2));
-          console.log('🔍 DEBUG: Available fields in first prescription:', Object.keys(prescriptionsData[0]));
         }
         
         // Set patient info and prescriptions

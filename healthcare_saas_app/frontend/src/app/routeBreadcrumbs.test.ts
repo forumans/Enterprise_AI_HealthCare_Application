@@ -13,6 +13,11 @@ describe("route breadcrumbs", () => {
     expect(getRouteBreadcrumb("/admin/deactivate")).toBe("Home > Admin > Deactivate");
   });
 
+  it("labels the self-service password pages", () => {
+    expect(getRouteBreadcrumb("/forgot-password")).toBe("Home > Forgot Password");
+    expect(getRouteBreadcrumb("/reset-password")).toBe("Home > Reset Password");
+  });
+
   it("has a breadcrumb for every Support Staff menu entry", () => {
     for (const item of submenuMap["Support Staff"]) {
       expect(getRouteBreadcrumb(item.to)).not.toBe("Home");

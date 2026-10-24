@@ -119,20 +119,16 @@ export function useUserData(session: SessionState) {
 
   const loadTenantInfo = async () => {
     if (!session.accessToken) {
-      console.log('No access token, skipping tenant info load');
       return;
     }
 
-    console.log('Loading tenant info with token:', session.accessToken ? 'Token present' : 'No token');
     
     try {
       // First, debug what identity we have
       const debugInfo = await api.debugTenantInfo(session.accessToken);
-      console.log('Debug info:', debugInfo);
       
       // Then get the actual tenant info
       const tenantInfo = await api.getCurrentTenant(session.accessToken);
-      console.log('Tenant info loaded:', tenantInfo);
       setState(prev => ({
         ...prev,
         tenantInfo
@@ -159,11 +155,6 @@ export function useUserData(session: SessionState) {
 
   // Load users when session changes
   useEffect(() => {
-    console.log('useUserData useEffect triggered:', { 
-      hasAccessToken: !!session.accessToken, 
-      role: session.role,
-      fullSession: session
-    });
     
     if (session.accessToken && session.role === 'ADMIN') {
       loadUsers();
@@ -173,10 +164,8 @@ export function useUserData(session: SessionState) {
 
     // Load tenant info for all authenticated users
     if (session.accessToken) {
-      console.log('Calling loadTenantInfo...');
       loadTenantInfo();
     } else {
-      console.log('No access token found in session');
     }
   }, [session.accessToken, session.role]);
 

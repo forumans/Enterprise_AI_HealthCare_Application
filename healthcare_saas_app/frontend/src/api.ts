@@ -26,6 +26,13 @@ function debugError(...args: unknown[]) {
   }
 }
 
+/**
+ * Fired on `window` when a request that carried a login token gets 401: the server no longer
+ * accepts the session (expired, or the account was deactivated/deleted/changed). AuthContext
+ * listens for it and signs the user out.
+ */
+export const SESSION_ENDED_EVENT = "hc:session-ended";
+
 export async function request<T>(url: string, options?: RequestInit): Promise<T> {
   try {
     // Debug: Log the request details
@@ -51,6 +58,11 @@ export async function request<T>(url: string, options?: RequestInit): Promise<T>
     if (!response.ok) {
       const errorText = await response.text();
       debugError("Error response body:", errorText);
+
+      const sentToken = Boolean(options?.headers && (options.headers as Record<string, string>).Authorization);
+      if (response.status === 401 && sentToken) {
+        window.dispatchEvent(new CustomEvent(SESSION_ENDED_EVENT));
+      }
       
       // Try to parse JSON error to get the detail field
       try {
@@ -69,7 +81,6 @@ export async function request<T>(url: string, options?: RequestInit): Promise<T>
     }
     
     const data = await response.json() as T;
-    debugLog(`DEBUG: JSON response data for ${url}:`, data);
     return data;
   } catch (error) {
     if (error instanceof Error) {
@@ -114,9 +125,6 @@ export const api = {
     request<LoginResponse>("/auth/login", {
       method: "POST",
       body: JSON.stringify(payload),
-    }).then(response => {
-      debugLog('DEBUG: API login response:', response);
-      return response;
     }),
 
   forgotPassword: (email: string) =>
@@ -212,9 +220,6 @@ export const api = {
     }>>('/patient/prescriptions', {
       method: "GET",
       headers: withAuth(token || ''),
-    }).then(response => {
-      debugLog('API: patientPrescriptions response:', response);
-      return response;
     }).catch(error => {
       debugError('API: patientPrescriptions error:', error);
       throw error;
@@ -242,9 +247,6 @@ export const api = {
     }>>(url, {
       method: "GET",
       headers: withAuth(token || ''),
-    }).then(response => {
-      debugLog('API: patientPrescriptionsFull response:', response);
-      return response;
     }).catch(error => {
       debugError('API: patientPrescriptionsFull error:', error);
       throw error;
@@ -320,8 +322,6 @@ export const api = {
         date_of_birth: payload.dateOfBirth,
       };
       
-      debugLog("🔍 DEBUG: Doctor self-registration payload:", requestBody);
-      debugLog("🔍 DEBUG: Phone field in doctor registration:", requestBody.phone);
       
       return request<{ message: string }>("/doctors/register", {
         method: "POST",
@@ -585,8 +585,6 @@ export const api = {
     }),
 
   updateDoctorProfile: (token: string, payload: any) => {
-      debugLog("🔍 DEBUG: Doctor profile update payload:", payload);
-      debugLog("🔍 DEBUG: Phone field in profile update:", payload.phone);
       
       return request<{ message: string }>(`/doctor/profile`, {
         method: "PUT",
@@ -617,9 +615,6 @@ export const api = {
     }>>('/prescriptions/pharmacies', {
       method: "GET",
       headers: withAuth(token || ''),
-    }).then(response => {
-      debugLog('API: getPharmacies response:', response);
-      return response;
     }).catch(error => {
       debugError('API: getPharmacies error:', error);
       throw error;

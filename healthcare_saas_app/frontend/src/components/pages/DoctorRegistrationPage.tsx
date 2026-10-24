@@ -111,11 +111,8 @@ export function DoctorRegistrationPage({ auth }: DoctorRegistrationPageProps) {
         dateOfBirth: dateOfBirth || undefined,
       };
       
-      console.log("🔍 DEBUG: Doctor registration form payload:", payload);
-      console.log("🔍 DEBUG: Phone from form:", payload.phone);
       
       const result = await api.registerDoctor(payload);
-      console.log("🔍 DEBUG: Doctor registration result:", result);
       
       setStatus(result.message);
       setStatusType('success'); // Success message

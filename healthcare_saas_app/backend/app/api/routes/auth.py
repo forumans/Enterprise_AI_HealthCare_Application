@@ -3,8 +3,8 @@
 Implements:
 - POST /auth/register
 - POST /auth/login
-- POST /auth/forgot-password
-- POST /auth/reset-password
+- POST /auth/forgot-password  (emails a single-use, time-limited reset link)
+- POST /auth/reset-password   (sets a new password from that link)
 """
 
 from __future__ import annotations
@@ -18,11 +18,21 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ...core.security import hash_password, verify_password, create_access_token
+from ...core.config import settings
+from ...core.security import (
+    create_access_token,
+    create_password_reset_token,
+    hash_password,
+    password_reset_token_matches,
+    read_password_reset_token,
+    verify_password,
+)
 from ...core.dependencies import CurrentIdentity, get_current_identity, require_roles
 from ...core.database import get_db
 from ...models import Patient, Tenant, User
+from ...services.account_service import ensure_email_available
 from ...services.audit_service import write_audit_log
+from ...services.email_service import send_email
 
 router = APIRouter(prefix="/auth")
 
@@ -56,7 +66,7 @@ class ForgotPasswordRequest(BaseModel):
 
 class ResetPasswordRequest(BaseModel):
     token: str
-    new_password: str = Field(min_length=5)
+    new_password: str = Field(min_length=8)
 
 
 async def _ensure_default_tenant(db: AsyncSession) -> Tenant:
@@ -78,6 +88,7 @@ async def _ensure_default_tenant(db: AsyncSession) -> Tenant:
 @router.post("/register", status_code=status.HTTP_201_CREATED)
 async def register(request: RegisterRequest, db: AsyncSession = Depends(get_db)) -> dict:
     tenant = await _ensure_default_tenant(db)
+    await ensure_email_available(db, str(request.email).lower(), tenant.id)
 
     user = User(
         tenant_id=tenant.id,
@@ -167,15 +178,75 @@ async def login(request: LoginRequest, db: AsyncSession = Depends(get_db)) -> di
     }
 
 
+FORGOT_PASSWORD_REPLY = {"message": "If an account exists for that email, a password reset link has been sent."}
+INVALID_RESET_LINK = "This password reset link is invalid or has expired. Please request a new one."
+PASSWORD_RESET_EMAIL = """We received a request to reset your password.
+
+Open this link within {minutes} minutes to choose a new password:
+{link}
+
+The link works once. If you didn't ask for this, you can ignore this email; your password stays the same.
+"""
+
+
 @router.post("/forgot-password")
-async def forgot_password(request: ForgotPasswordRequest) -> dict:
-    # Security best practice: always return generic success response.
-    print(f"[DEBUG] Forgot password requested for email: {request.email}")
-    return {"message": "If an account exists, a reset link has been sent."}
+async def forgot_password(request: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)) -> dict:
+    """Email a single-use, time-limited reset link to an active account.
+
+    The reply is identical whether or not the email belongs to an account (and whether email could
+    be sent), so it can't be used to discover which emails are registered.
+    """
+
+    email = str(request.email).strip().lower()
+    user = (
+        await db.execute(select(User).where(User.email == email, User.deleted_at.is_(None), User.is_active.is_(True)))
+    ).scalar_one_or_none()
+    if user is not None:
+        token = create_password_reset_token(user_id=user.id, password_hash=user.password_hash)
+        link = f"{settings.frontend_url}/reset-password?token={token}"
+        await send_email(
+            user.email,
+            "Reset your password",
+            PASSWORD_RESET_EMAIL.format(minutes=settings.password_reset_minutes, link=link),
+        )
+        await write_audit_log(
+            db,
+            tenant_id=user.tenant_id,
+            table_name="users",
+            record_id=user.id,
+            action_type="UPDATE",
+            old_data=None,
+            new_data={"password_reset_requested": True},
+            performed_by=user.id,
+        )
+        await db.commit()
+    return FORGOT_PASSWORD_REPLY
 
 
 @router.post("/reset-password")
-async def reset_password(request: ResetPasswordRequest) -> dict:
-    # Placeholder until secure reset-token persistence/verification is added.
-    _ = request
-    return {"message": "Password reset flow accepted."}
+async def reset_password(request: ResetPasswordRequest, db: AsyncSession = Depends(get_db)) -> dict:
+    """Set a new password using the token from a reset email."""
+
+    claims = read_password_reset_token(request.token)
+    if claims is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=INVALID_RESET_LINK)
+    user_id, fingerprint = claims
+    user = (
+        await db.execute(select(User).where(User.id == user_id, User.deleted_at.is_(None), User.is_active.is_(True)))
+    ).scalar_one_or_none()
+    if user is None or not password_reset_token_matches(fingerprint, user.password_hash):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=INVALID_RESET_LINK)
+
+    user.password_hash = hash_password(request.new_password)
+    await write_audit_log(  # never log the password itself
+        db,
+        tenant_id=user.tenant_id,
+        table_name="users",
+        record_id=user.id,
+        action_type="UPDATE",
+        old_data=None,
+        new_data={"password_reset": True, "via": "email_link"},
+        performed_by=user.id,
+    )
+    await db.commit()
+    return {"message": "Your password has been reset. You can now sign in with your new password."}

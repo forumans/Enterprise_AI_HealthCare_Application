@@ -2,7 +2,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from backend.app.api.routes.doctor import search_patients
+from backend.app.api.routes.patients import search_patients
 
 
 class _FakeScalars:
@@ -13,6 +13,9 @@ class _FakeScalars:
 class _FakeResult:
     def scalars(self):
         return _FakeScalars()
+
+    def all(self):
+        return []
 
 
 class _FakeDbSession:

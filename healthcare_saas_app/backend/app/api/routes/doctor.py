@@ -17,6 +17,7 @@ from ...models import Appointment, Doctor, DoctorAvailability, MedicalRecord, Pa
 from ...core.security import hash_password
 from ...core.timeutils import clinic_day_bounds, clinic_today, clinic_week_bounds, parse_client_datetime, utc_now
 from ...services.availability_service import ensure_default_slots
+from ...services.account_service import ensure_email_available
 from ...services.audit_service import write_audit_log
 
 router = APIRouter()
@@ -55,7 +56,8 @@ async def register_admin(
     
     # Get or create default tenant
     tenant = await _ensure_default_tenant(db)
-    
+    await ensure_email_available(db, payload.email.lower().strip(), tenant.id)
+
     # Create user first
     user = User(
         tenant_id=tenant.id,
@@ -95,7 +97,8 @@ async def register_doctor(
     
     # Get or create default tenant
     tenant = await _ensure_default_tenant(db)
-    
+    await ensure_email_available(db, payload.email.lower().strip(), tenant.id)
+
     # Create user first
     user = User(
         tenant_id=tenant.id,
@@ -245,11 +248,15 @@ async def get_current_doctor(
 
 @router.get("/doctors")
 async def list_doctors(
+    identity: CurrentIdentity = Depends(get_current_identity),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    # For now, return all non-deleted doctors across all tenants
-    # In production, you may want to filter by tenant or add auth
-    stmt = select(Doctor).where(Doctor.deleted_at.is_(None)).order_by(Doctor.full_name.asc())
+    """Active doctors of the caller's clinic (tenant) only."""
+    stmt = (
+        select(Doctor)
+        .where(Doctor.tenant_id == identity.tenant_id, Doctor.deleted_at.is_(None))
+        .order_by(Doctor.full_name.asc())
+    )
     rows = (await db.execute(stmt)).scalars().all()
     return [{"id": row.id, "name": row.full_name, "specialty": row.specialty, "license_number": row.license_number} for row in rows]
 
@@ -288,6 +295,7 @@ async def list_availability(
 @router.get("/doctor/availability/{doctor_id}/ndays")
 async def list_availability_next_30_days(
     doctor_id: str,
+    identity: CurrentIdentity = Depends(get_current_identity),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     # Read-only listing: default slots are generated only by /doctor/availability/{doctor_id}/all.
@@ -303,6 +311,7 @@ async def list_availability_next_30_days(
         .where(
             and_(
                 Doctor.id == doctor_id,
+                Doctor.tenant_id == identity.tenant_id,
                 DoctorAvailability.doctor_id == doctor_id,
                 DoctorAvailability.status == "AVAILABLE",
                 DoctorAvailability.slot_time >= now,
@@ -545,7 +554,6 @@ async def doctor_all_appointments(
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     """Get all appointments for a given week without date restrictions."""
-    print(f"DEBUG: doctor_all_appointments called - user_id: {identity.user_id}")
     
     anchor = from_date or clinic_today()
     
@@ -559,9 +567,7 @@ async def doctor_all_appointments(
         )
     ).scalar_one_or_none()
     
-    print(f"DEBUG: doctor lookup result: {doctor}")
     if doctor is None:
-        print("DEBUG: No doctor found, returning empty list")
         return []
 
     week_start, week_end = clinic_week_bounds(anchor)
@@ -583,7 +589,6 @@ async def doctor_all_appointments(
     )
     rows = (await db.execute(stmt)).all()
     
-    print(f"DEBUG: Found {len(rows)} appointments")
     
     result = [
         {
@@ -597,7 +602,6 @@ async def doctor_all_appointments(
         for appointment, patient in rows
     ]
     
-    print(f"DEBUG: Returning {len(result)} appointments")
     return result
 
 
@@ -826,104 +830,6 @@ async def upsert_doctor_availability(
             await db.commit()
             return {"message": "Slot blocked successfully"}
     return {"message": "Availability updated."}
-
-
-@router.get("/patients/search")
-async def search_patients(
-    q: str,
-    identity: CurrentIdentity = Depends(require_roles("DOCTOR")),
-    db: AsyncSession = Depends(get_db),
-) -> list[dict]:
-    
-    query = q.strip()
-    if len(query) < 2:
-        return []
-
-    # Get patients matching the search
-    stmt = select(Patient).where(
-        Patient.tenant_id == identity.tenant_id,
-        Patient.deleted_at.is_(None),
-        Patient.full_name.ilike(f"%{query}%"),
-    )
-    patients = (await db.execute(stmt)).scalars().all()
-    
-    results = []
-    for patient in patients:
-        
-        # Get the most recent appointment for this patient (optional)
-        appointment_stmt = select(Appointment).where(
-            and_(
-                Appointment.patient_id == patient.id,
-                Appointment.tenant_id == identity.tenant_id,
-                Appointment.deleted_at.is_(None),
-            )
-        ).order_by(Appointment.appointment_time.desc()).limit(1)
-        
-        appointment = (await db.execute(appointment_stmt)).scalar_one_or_none()
-        
-        medical_record = None
-        prescription = None
-        
-        if appointment:
-            medical_record_stmt = select(MedicalRecord).where(
-                and_(
-                    MedicalRecord.appointment_id == appointment.id,
-                    MedicalRecord.tenant_id == identity.tenant_id,
-                    MedicalRecord.deleted_at.is_(None),
-                )
-            )
-            medical_record = (await db.execute(medical_record_stmt)).scalar_one_or_none()
-            
-            if medical_record:
-                prescription_stmt = select(Prescription).where(
-                    and_(
-                        Prescription.medical_record_id == medical_record.id,
-                        Prescription.tenant_id == identity.tenant_id,
-                        Prescription.deleted_at.is_(None),
-                    )
-                )
-                prescription = (await db.execute(prescription_stmt)).scalar_one_or_none()
-        
-        # Construct address from patient fields
-        address_parts = [
-            patient.address_line1,
-            patient.address_line2,
-            patient.city,
-            patient.state,
-            patient.postal_code,
-            patient.country
-        ]
-        address = ", ".join(filter(None, address_parts))
-        
-        # Extract DOB and Gender with explicit conversion
-        dob_value = ""
-        if patient.date_of_birth:
-            dob_value = patient.date_of_birth.isoformat()
-        
-        gender_value = ""
-        if patient.gender:
-            gender_value = str(patient.gender)
-        
-        # Always return patient data, even if no appointments
-        result = {
-            "id": str(patient.id),  # Ensure UUID is converted to string
-            "name": patient.full_name,
-            "phone": patient.phone or "",
-            "dob": dob_value,
-            "gender": gender_value,
-            "address": address,
-            "symptoms": medical_record.symptoms if medical_record else "",
-            "diagnosis": medical_record.diagnosis if medical_record else "",
-            "lab_results": medical_record.lab_results if medical_record else "",
-            "medication": prescription.medication_details if prescription else "",
-            "prescription_date": appointment.appointment_time.isoformat() if appointment else "",
-        }
-        
-        # Debug log
-        
-        results.append(result)
-    
-    return results
 
 
 @router.get("/doctor/profile")

@@ -231,3 +231,11 @@ CORSMiddleware(
 ```
 
 CORS is handled entirely by FastAPI. API Gateway does **not** add CORS headers — adding them at both layers would cause duplicate headers and break browser requests.
+
+## Session validity
+
+Every authenticated request re-checks the account behind the token: if the user has been deactivated or soft-deleted, moved to another clinic, or given a different role since signing in, the request is refused with `401` ("Your session is no longer valid. Please sign in again.") instead of working until the token expires.
+
+## Password reset
+
+`POST /api/auth/forgot-password` emails a reset link signed with a key derived from `JWT_SECRET` (separate from the login-token key, so neither can stand in for the other). The token carries a fingerprint of the current password hash, so it stops working once the password changes, and it expires after `PASSWORD_RESET_MINUTES`. Admins can also reset any password from Admin > Reset Password / Email.

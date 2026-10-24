@@ -38,16 +38,8 @@ export function useAuth() {
 
   // Handle navigation when session changes
   useEffect(() => {
-    console.log('DEBUG: useAuth useEffect triggered:', {
-      pendingNavigation,
-      sessionRole: session.role,
-      sessionRoleType: typeof session.role,
-      isGuest: session.role === "GUEST",
-      condition: pendingNavigation && session.role !== "GUEST"
-    });
     
     if (pendingNavigation && session.role !== "GUEST") {
-      console.log('DEBUG: Session updated, navigating to:', pendingNavigation);
       
       // Small delay to ensure state update has propagated
       setTimeout(() => {
@@ -82,16 +74,12 @@ export function useAuth() {
    */
   async function handleLogin(target: "PATIENT" | "DOCTOR" | "ADMIN") {
     try {
-      console.log('DEBUG: Starting login for role:', target);
       const result = await api.login({ 
         email: loginForm.email, 
         password: loginForm.password, 
         remember_me: false 
       });
       
-      console.log('DEBUG: Login result:', result);
-      console.log('DEBUG: Result role type:', typeof result.role);
-      console.log('DEBUG: Result role value:', result.role);
       
       const newSession = {
         accessToken: result.access_token,
@@ -102,15 +90,12 @@ export function useAuth() {
         insurancePolicyId: result.insurance_policy_id,
       };
       
-      console.log('DEBUG: New session object:', newSession);
       
       setSession(newSession);
       
-      console.log('DEBUG: Session set, navigating to dashboard...');
       
       // Navigate after a short delay to ensure state update
       setTimeout(() => {
-        console.log('DEBUG: Delayed navigation, target role:', target);
         
         // Set pending navigation based on target role
         if (target === "PATIENT") {

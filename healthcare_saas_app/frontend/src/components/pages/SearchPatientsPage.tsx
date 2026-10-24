@@ -26,7 +26,6 @@ function DoctorDetails({ session, auth }: { session: SessionState; auth: any }) 
       try {
         // Use /doctor/profile endpoint to get complete doctor data (includes phone)
         const data = await api.getDoctorProfile(session.accessToken);
-        console.log('🔍 DEBUG: Doctor data from /doctor/profile:', data);
         setDoctorData(data);
       } catch (err) {
         console.error("Failed to load doctor data:", err);

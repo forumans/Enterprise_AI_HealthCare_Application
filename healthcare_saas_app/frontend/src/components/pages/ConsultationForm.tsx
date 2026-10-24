@@ -48,8 +48,6 @@ export function ConsultationForm({ session, appointmentId }: ConsultationFormPro
         ]);
         setAppointment(details);
         setPharmacies(pharmaciesData);
-        console.log('🔍 DEBUG: Loaded pharmacies:', pharmaciesData);
-        console.log('🔍 DEBUG: Number of pharmacies loaded:', pharmaciesData.length);
       } catch (err: any) {
         console.error('🔍 DEBUG: Error loading appointment details:', err);
         const errorMessage = parseErrorMessage(err);
@@ -102,12 +100,10 @@ export function ConsultationForm({ session, appointmentId }: ConsultationFormPro
           notes: consultationState.symptoms || "No specific symptoms noted",
           lab_results: consultationState.labResults || null
         }, session.accessToken);
-        console.log("Medical record created successfully");
         medicalRecordId = medicalRecordResponse.id;
       } catch (medicalRecordError: any) {
         // If medical record already exists (409), we need to get the existing record ID
         if (medicalRecordError.message?.includes("Medical record already exists for appointment")) {
-          console.log("Medical record already exists, fetching existing record");
           setSuccess("Medical record already exists. Fetching existing record...");
           
           // Get the existing medical record for this appointment
@@ -115,7 +111,6 @@ export function ConsultationForm({ session, appointmentId }: ConsultationFormPro
             const existingRecords = await api.getMedicalRecordByAppointment(appointmentId, session.accessToken);
             if (existingRecords && existingRecords.length > 0) {
               medicalRecordId = existingRecords[0].id;
-              console.log("Found existing medical record ID:", medicalRecordId);
             }
           } catch (fetchError) {
             console.error("Failed to fetch existing medical record:", fetchError);
@@ -128,15 +123,12 @@ export function ConsultationForm({ session, appointmentId }: ConsultationFormPro
 
       // Create prescription if medication is provided and we have a medical record ID
       if (consultationState.medication && consultationState.dosage && medicalRecordId) {
-        console.log("Creating prescription with medical record ID:", medicalRecordId);
         await api.createPrescription({
           medical_record_id: medicalRecordId,
           medication_details: `${consultationState.medication} - ${consultationState.dosage}. ${consultationState.instructions || "Take as prescribed"}`,
           pharmacy_id: selectedPharmacy || null
         }, session.accessToken);
-        console.log("Prescription created successfully");
       } else if (consultationState.medication && consultationState.dosage) {
-        console.log("Cannot create prescription - no medical record ID available");
       }
 
       // Mark appointment as completed
@@ -401,7 +393,6 @@ export function ConsultationForm({ session, appointmentId }: ConsultationFormPro
                 <select
                   value={selectedPharmacy}
                   onChange={(e) => {
-                    console.log('🔍 DEBUG: Selected pharmacy:', e.target.value);
                     setSelectedPharmacy(e.target.value);
                   }}
                   style={{

@@ -45,10 +45,8 @@ export function PatientAppointmentsPage({ auth, appointments, userData }: Patien
         await userData.loadPatientDetails();
         
         // Load doctors
-        console.log('Loading doctors with token:', auth.session.accessToken ? 'Token present' : 'No token');
         api.listDoctors(auth.session.accessToken)
           .then(data => {
-            console.log('Doctors loaded:', data);
             setDoctors(data);
           })
           .catch((error) => {

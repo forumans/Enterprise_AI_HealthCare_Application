@@ -182,7 +182,6 @@ async def patient_prescriptions_full(
     For PATIENT role: Returns their own prescriptions
     For DOCTOR role: Returns prescriptions for specified patient_id
     """
-    print(f"DEBUG: prescriptions-full called - role: {identity.role}, patient_id: {patient_id}")
     
     if identity.role == "PATIENT":
         # Patients can only access their own data
@@ -210,7 +209,6 @@ async def patient_prescriptions_full(
     else:
         raise HTTPException(status_code=403, detail="Insufficient permissions")
     
-    print(f"DEBUG: Found patient: {patient.id} - {patient.full_name}")
     
     # Execute the complete SQL query with all JOINs
     query = text("""
@@ -238,7 +236,6 @@ async def patient_prescriptions_full(
     """)
     
     result = await db.execute(query, {"patient_id": patient.id})
-    print(f"DEBUG: SQL query returned {result.rowcount} rows")
     
     prescriptions = []
     for row in result:
@@ -254,11 +251,7 @@ async def patient_prescriptions_full(
             "pharmacy_name": row.pharmacy_name or "",
             "appointment_created_at": row.appointment_created_at.isoformat() if row.appointment_created_at else None
         })
-    
-    if prescriptions:
-        print(f"DEBUG: First prescription doctor_name: '{prescriptions[0]['doctor_name']}'")
-        print(f"DEBUG: First prescription data: {prescriptions[0]}")
-    
+
     return prescriptions
 
 

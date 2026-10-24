@@ -4,9 +4,9 @@
  * Ensures single instance of auth state to prevent state synchronization issues
  */
 
-import React, { createContext, useState, useEffect, useContext } from "react";
+import React, { createContext, useState, useEffect, useContext, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { api } from "../api";
+import { api, SESSION_ENDED_EVENT } from "../api";
 import { requireRole } from "../app/access";
 import { getMainMenuFromPath } from "../config/menu";
 import { delay, parseErrorMessage } from "../utils";
@@ -14,13 +14,19 @@ import { DEFAULT_COUNTRY, STATUS_MESSAGE_DURATION, INITIAL_STATUS_DURATION } fro
 import type { SessionState, Role, LoginFormState, PatientRegistrationState, RegisterPayload } from "../types/app";
 
 const initialSession: SessionState = { accessToken: "", role: "GUEST", tenantId: "" };
-const debugEnabled = import.meta.env.DEV || import.meta.env.VITE_ENABLE_DEBUG_LOGS === "true";
 
-function debugLog(...args: unknown[]) {
-  if (debugEnabled) {
-    console.log(...args);
-  }
-}
+/** Login page for each role, where a user lands when their session ends. */
+export const LOGIN_PATH_BY_ROLE: Record<string, string> = {
+  PATIENT: "/patients/login",
+  DOCTOR: "/doctors/login",
+  ADMIN: "/admin/login",
+  SUPPORT_STAFF: "/support/login",
+};
+
+export const SESSION_ENDED_NOTICE = "Your session has ended. Please sign in again.";
+
+// Auth flow tracing was removed: it logged login details to the browser console.
+function debugLog(..._args: unknown[]) {}
 
 interface AuthContextType {
   session: SessionState;
@@ -115,6 +121,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }, 50);
     }
   }, [session, pendingNavigation, navigate]);
+
+  // Sign out gracefully when the server stops accepting the session (expired token, or the
+  // account was deactivated/deleted/changed). Several requests can fail at once; the ref makes
+  // sure only the first one signs out and redirects.
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+  useEffect(() => {
+    const onSessionEnded = () => {
+      const role = sessionRef.current.role;
+      if (role === "GUEST") return;
+      sessionRef.current = initialSession;
+      setSession(initialSession);
+      setPendingNavigation(null);
+      setLoginForm({ email: "", password: "" });
+      setStatus("");
+      // The login page clears status on mount, so the notice travels with the navigation
+      navigate(LOGIN_PATH_BY_ROLE[role] ?? "/", { replace: true, state: { notice: SESSION_ENDED_NOTICE } });
+    };
+    window.addEventListener(SESSION_ENDED_EVENT, onSessionEnded);
+    return () => window.removeEventListener(SESSION_ENDED_EVENT, onSessionEnded);
+  }, [navigate]);
 
   // Handle login
   async function handleLogin(target: LoginRole) {

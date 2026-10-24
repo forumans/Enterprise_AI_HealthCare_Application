@@ -172,6 +172,15 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
             if isinstance(iat, (int, float)) and datetime.fromtimestamp(iat, tz=UTC) > datetime.now(tz=UTC):
                 raise ValueError("Access token has an invalid issued-at timestamp.")
 
+        except HTTPException as exc:
+            # The claim helpers raise HTTPException(401); inside middleware nothing turns it into a
+            # response, so without this an expired/garbled token surfaced as a 500 - and the
+            # frontend's "session ended" sign-out, which reacts to 401, never ran.
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"detail": exc.detail},
+                headers={"X-Request-ID": request_id},
+            )
         except ValueError as exc:
             return JSONResponse(
                 status_code=status.HTTP_401_UNAUTHORIZED,

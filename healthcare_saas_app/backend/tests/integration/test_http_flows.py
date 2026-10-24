@@ -23,12 +23,14 @@ import urllib.request
 from pathlib import Path
 
 import asyncpg
+import jwt
 
 from backend.app.core.security import hash_password
 from backend.tests.integration._pg import CLINIC_TZ, TempDatabase, require_pg
 
 APP_ROOT = Path(__file__).resolve().parents[3]  # healthcare_saas_app/ - the folder containing backend/
 PASSWORD = "Password123"
+JWT_SECRET = "http-flow-tests-secret-not-real-0123456789"  # the test server signs tokens with this
 
 
 def _free_port() -> int:
@@ -54,7 +56,7 @@ class HttpFlowTests(unittest.TestCase):
                 **os.environ,
                 "DATABASE_URL": cls.db.sqlalchemy_url,
                 "DB_SCHEMA_INIT_ON_STARTUP": "false",
-                "JWT_SECRET": "http-flow-tests-secret-not-real-0123456789",
+                "JWT_SECRET": JWT_SECRET,
                 "JWT_ALGORITHM": "HS256",
                 "ACCESS_TOKEN_MINUTES": "60",
                 "CORS_ORIGINS": "http://localhost:5173",
@@ -252,6 +254,21 @@ class HttpFlowTests(unittest.TestCase):
         self.assertEqual(self.call("GET", "/doctors")[0], 401)
         for token in (patient, staff, doctor2):
             self.assertEqual([d["name"] for d in self.ok("GET", "/doctors", token)], ["Dr One", "Dr Two"])
+
+    def test_dead_tokens_get_401_so_the_app_signs_the_user_out(self):
+        # The frontend signs the user out on a 401 for a request that carried a token, so expired or
+        # garbled tokens must produce 401 - not 500 (which they used to, from inside the middleware).
+        admin = self.login("admin@http.test")
+        claims = jwt.decode(admin, JWT_SECRET, algorithms=["HS256"])
+        expired = jwt.encode({**claims, "iat": int(time.time()) - 7200, "exp": int(time.time()) - 3600}, JWT_SECRET, algorithm="HS256")
+        wrong_key = jwt.encode(claims, "some-other-secret-0123456789abcdef", algorithm="HS256")
+        bad_role = jwt.encode({**claims, "role": "SUPERUSER"}, JWT_SECRET, algorithm="HS256")
+        for label, token in (("expired", expired), ("garbled", "not-a-real-token"), ("wrong signing key", wrong_key), ("unknown role", bad_role)):
+            with self.subTest(label):
+                status, body = self.call("GET", "/doctors", token)
+                self.assertEqual(status, 401, body)
+                self.assertTrue(body["detail"])
+        self.assertEqual(len(self.ok("GET", "/doctors", admin)), 2)  # the real token still works
 
     def test_admin_account_management_end_to_end(self):
         admin = self.login("admin@http.test")

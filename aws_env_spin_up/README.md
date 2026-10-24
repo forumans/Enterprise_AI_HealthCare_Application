@@ -8,7 +8,7 @@ So "stop paying entirely" means: snapshot and delete RDS, verify there's no forg
 
 ## Current status
 
-**Torn down as of 2026-07-17** (was redeployed 2026-07-10 for a demo; no demo needed for a while, so torn down again to stop the RDS bill). Final snapshot: `healthcare-db-final-2026-07-17-153336` (see the gitignored `scripts/last-teardown-metadata.json` for the exact restore parameters — same subnet group/security group/instance class as before). No NAT Gateway or unattached Elastic IP found (checked again this time). The `.env.production.backup.json` secrets backup was refreshed from the live Lambda before deletion, in case anything had changed since the last redeploy — it hadn't. CloudFront (see `scripts/aws-config.local.json` for the actual domain) is still up; `/api/*` calls will fail until `redeploy.ps1` is run again.
+**Running since 2026-10-22** (redeployed for a client demo). On 2026-10-24 the latest code was deployed in place with `deploy-update.ps1` and migration 005 (Support Staff role) applied with `run-migration.ps1`. RDS bills again while it runs (~$0.40-0.50/day) - run `teardown.ps1` when the demo is over. The previous teardown (2026-07-17, snapshot `healthcare-db-final-2026-07-17-153336`) is what `redeploy.ps1` restored from.
 
 **To bring it back up for the next demo**, run `redeploy.ps1` — see below. It's now fully automated (RDS restore, SAM deploy, CloudFront origin update, frontend rebuild/redeploy) based on the fix from the 2026-07-10 incident.
 
@@ -33,6 +33,8 @@ aws_env_spin_up/
 └── scripts/
     ├── teardown.ps1
     ├── redeploy.ps1
+    ├── deploy-update.ps1                  (deploy new code to the running environment)
+    ├── run-migration.ps1                  (apply SQL migrations via a temporary in-VPC Lambda)
     ├── iam-policy-teardown-redeploy.json  (IAM policy granting the extra permissions these scripts need)
     ├── aws-config.example.json            (tracked — placeholder shape for the real config below)
     ├── aws-config.local.json              (gitignored — real account ID/bucket names/subnet & security-group IDs/CloudFront domain; copy from the example above and fill in)
@@ -77,6 +79,21 @@ This will, in order:
 **Try it safely first**: run `.\teardown.ps1 -WhatIf`. In this mode the script makes no changes at all — it skips the schema dump, skips creating a snapshot, and exits before ever asking you to confirm a deletion. It only runs a couple of read-only "list my resources" AWS calls (to check for a forgotten NAT Gateway) which cannot change anything. It prints `[PREVIEW MODE]` next to every step it would otherwise perform. Your live app is never touched by this preview.
 
 **After this completes**, the CloudFront URL still resolves but `/api/*` calls will error (backend is gone) — that's expected. The frontend static assets and CloudFront distribution stay up at effectively no cost.
+
+## Updating a running environment
+
+When the environment is already up, deploy new code in place instead of tearing down and redeploying:
+
+```powershell
+cd aws_env_spin_up/scripts
+.\run-migration.ps1 -Preflight                    # optional: check packaging/VPC/DB access, read-only
+.\run-migration.ps1 -MigrationFiles <file.sql>    # only if the release adds migrations - run these FIRST
+.\deploy-update.ps1                               # sam build/deploy (stack update) + frontend build, S3 sync, invalidation
+```
+
+- **`run-migration.ps1`** runs SQL files from a temporary Lambda inside the VPC (RDS is private and there is no bastion), then deletes the Lambda and its IAM role. Migrations that alter types or tables must run as the table owner - the RDS master user `postgres` - so it asks for the master password at a hidden prompt (run it yourself in an interactive PowerShell window). The password goes only into the Lambda invocation payload; the payload file is deleted right after. Afterwards it grants the app user (`healthcare_user`) DML on any public table it can't read - **RDS has no default privileges for the app user, so tables created by `postgres` need this grant** (the local dev database does have them). `-Preflight` connects as the app user instead, makes no changes and reports the `user_role` values, whether `support_staff` exists, and any tables the app user can't fully read/write.
+- **`deploy-update.ps1`** reuses the live Lambda's `DATABASE_URL`/`JWT_SECRET` (never printed), so sessions and the DB connection carry over, refuses to run on an unhealthy stack, checks the API URL didn't change (a stack update keeps it), and smoke-tests `/api/health` at the end. `-SkipBackend` / `-SkipFrontend` deploy just one half.
+- Run both from PowerShell, and don't pipe them through `2>&1`/`*>&1` (see the operational notes above).
 
 ## Redeploying for a demo
 

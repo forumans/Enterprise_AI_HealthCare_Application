@@ -1,8 +1,8 @@
 """Core scheduling flows against a real, migrated PostgreSQL database.
 
 Exercises the backend's own service/route functions (not HTTP) together with the real schema:
-slot generation, the booking trigger, the double-booking indexes, cancel/rebook, the clinic-local
-"today"/week views, and backfill migration 004.
+slot generation, the booking trigger, the double-booking indexes, cancel/rebook, rescheduling,
+patient and doctor cancellation, the clinic-local "today"/week views, and backfill migration 004.
 """
 
 import asyncio
@@ -17,7 +17,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from backend.app.api.routes.appointments import CreateAppointmentRequest, create_appointment, delete_appointment
+from backend.app.api.routes.appointments import (
+    CreateAppointmentRequest,
+    RescheduleAppointmentRequest,
+    confirm_appointment,
+    create_appointment,
+    delete_appointment,
+    reschedule_appointment_route,
+)
 from backend.app.api.routes.doctor import doctor_all_appointments, doctor_appointments_today
 from backend.app.core import timeutils
 from backend.app.models import Doctor
@@ -172,6 +179,232 @@ class CoreFlowTests(unittest.IsolatedAsyncioTestCase):
                 await delete_appointment(appointment_id=booked["id"], identity=self.identity("patient2", "PATIENT"), db=s)
         self.assertEqual(ctx.exception.status_code, 403)
 
+    # --- reschedule ---------------------------------------------------------------------------
+
+    async def _book(self, who: str, slot: datetime, reason: str = "Follow-up visit") -> str:
+        payload = CreateAppointmentRequest(doctor_id=self.ids["doctor"], slot=slot.isoformat(), reason=reason)
+        async with self.sessions() as s:
+            return (await create_appointment(payload=payload, identity=self.identity(who, "PATIENT"), db=s))["id"]
+
+    async def _reschedule(self, appointment_id: str, slot: datetime, who: str, role: str) -> dict:
+        async with self.sessions() as s:
+            return await reschedule_appointment_route(
+                appointment_id=appointment_id,
+                payload=RescheduleAppointmentRequest(slot=slot.isoformat()),
+                identity=self.identity(who, role),
+                db=s,
+            )
+
+    async def test_patient_and_doctor_reschedule_keeps_details_and_moves_slot(self):
+        async with self.sessions() as s:
+            await ensure_default_slots(s, await self.doctor(s))
+        day = timeutils.clinic_today() + timedelta(days=2)
+        original, by_patient, by_doctor = local(day, 10), local(day, 15), local(day + timedelta(days=1), 20)
+        appointment_id = await self._book("patient1", original, reason="Knee pain review")
+
+        await self._reschedule(appointment_id, by_patient, "patient1", "PATIENT")
+        rows = {r["slot_time"]: r["status"] for r in await self.slots()}
+        self.assertEqual((rows[original], rows[by_patient]), ("AVAILABLE", "BOOKED"))
+
+        async with self.sessions() as s:  # doctor confirms, then moves it again; status survives
+            await confirm_appointment(appointment_id=appointment_id, identity=self.identity("doctor", "DOCTOR"), db=s)
+        result = await self._reschedule(appointment_id, by_doctor, "doctor", "DOCTOR")
+        self.assertEqual(result["status"], "CONFIRMED")
+        rows = {r["slot_time"]: r["status"] for r in await self.slots()}
+        self.assertEqual((rows[by_patient], rows[by_doctor]), ("AVAILABLE", "BOOKED"))
+
+        conn = await self.db.connect()
+        try:
+            stored = await conn.fetchrow(
+                "SELECT appointment_time, notes, patient_id, doctor_id, status, slot_id FROM appointments WHERE id = $1", appointment_id
+            )
+            new_slot_id = await conn.fetchval(
+                "SELECT id FROM doctor_availability WHERE doctor_id = $1 AND slot_time = $2", self.ids["doctor"], by_doctor
+            )
+        finally:
+            await conn.close()
+        self.assertEqual(stored["appointment_time"], by_doctor)
+        self.assertEqual(stored["notes"], "Knee pain review")
+        self.assertEqual((str(stored["patient_id"]), str(stored["doctor_id"])), (self.ids["patient1"], self.ids["doctor"]))
+        self.assertEqual(stored["status"], "CONFIRMED")
+        self.assertEqual(stored["slot_id"], new_slot_id)
+
+        # The freed original slot can be booked by someone else.
+        await self._book("patient2", original)
+
+    async def test_reschedule_rejects_taken_slot_other_owner_and_past_time(self):
+        async with self.sessions() as s:
+            await ensure_default_slots(s, await self.doctor(s))
+        day = timeutils.clinic_today() + timedelta(days=2)
+        mine = await self._book("patient1", local(day, 10))
+        await self._book("patient2", local(day, 11))
+
+        cases = [
+            (local(day, 11), "patient1", "PATIENT", 409),  # slot already booked by patient2
+            (local(day, 12), "patient2", "PATIENT", 403),  # not patient2's appointment
+            (timeutils.utc_now() - timedelta(hours=1), "patient1", "PATIENT", 400),
+        ]
+        for slot, who, role, expected in cases:
+            with self.subTest(expected=expected):
+                with self.assertRaises(HTTPException) as ctx:
+                    await self._reschedule(mine, slot, who, role)
+                self.assertEqual(ctx.exception.status_code, expected)
+
+        rows = {r["slot_time"]: r["status"] for r in await self.slots()}
+        self.assertEqual((rows[local(day, 10)], rows[local(day, 12)]), ("BOOKED", "AVAILABLE"))  # nothing moved
+
+    async def test_patient_can_cancel_confirmed_appointment(self):
+        async with self.sessions() as s:
+            await ensure_default_slots(s, await self.doctor(s))
+        slot = local(timeutils.clinic_today() + timedelta(days=2), 14)
+        appointment_id = await self._book("patient1", slot)
+        async with self.sessions() as s:
+            await confirm_appointment(appointment_id=appointment_id, identity=self.identity("doctor", "DOCTOR"), db=s)
+
+        async with self.sessions() as s:
+            await delete_appointment(appointment_id=appointment_id, identity=self.identity("patient1", "PATIENT"), db=s)
+
+        rows = {r["slot_time"]: r["status"] for r in await self.slots()}
+        self.assertEqual(rows[slot], "AVAILABLE")
+        conn = await self.db.connect()
+        try:
+            status = await conn.fetchval("SELECT status FROM appointments WHERE id = $1", appointment_id)
+            audit_old = await conn.fetchval(
+                "SELECT old_data->>'status' FROM audit_logs WHERE record_id = $1 AND action_type = 'DELETE' ORDER BY performed_at DESC LIMIT 1",
+                appointment_id,
+            )
+        finally:
+            await conn.close()
+        self.assertEqual(status, "CANCELLED")
+        self.assertEqual(audit_old, "CONFIRMED")
+
+    async def test_doctor_can_cancel_only_own_appointments(self):
+        async with self.sessions() as s:
+            await ensure_default_slots(s, await self.doctor(s))
+        slot = local(timeutils.clinic_today() + timedelta(days=2), 16)
+        appointment_id = await self._book("patient1", slot)
+        conn = await self.db.connect()
+        try:  # a second doctor in the same clinic (reusing the admin user as its login)
+            await conn.execute(
+                "INSERT INTO doctors (tenant_id, user_id, full_name) VALUES ($1, $2, 'Dr Other')",
+                self.ids["tenant"], self.ids["admin_user"],
+            )
+        finally:
+            await conn.close()
+
+        async with self.sessions() as s:
+            with self.assertRaises(HTTPException) as ctx:
+                await delete_appointment(appointment_id=appointment_id, identity=self.identity("admin", "DOCTOR"), db=s)
+        self.assertEqual(ctx.exception.status_code, 403)
+
+        async with self.sessions() as s:
+            await delete_appointment(appointment_id=appointment_id, identity=self.identity("doctor", "DOCTOR"), db=s)
+        rows = {r["slot_time"]: r["status"] for r in await self.slots()}
+        self.assertEqual(rows[slot], "AVAILABLE")
+
+    async def _second_doctor(self) -> str:
+        """A second doctor in the same clinic (logging in as the admin user), with default slots."""
+        conn = await self.db.connect()
+        try:
+            doctor_id = str(await conn.fetchval(
+                "INSERT INTO doctors (tenant_id, user_id, full_name) VALUES ($1, $2, 'Dr Other') RETURNING id",
+                self.ids["tenant"], self.ids["admin_user"],
+            ))
+        finally:
+            await conn.close()
+        async with self.sessions() as s:
+            other = (await s.execute(select(Doctor).where(Doctor.id == doctor_id))).scalar_one()
+            await ensure_default_slots(s, other)
+        return doctor_id
+
+    async def _slot_status(self, doctor_id: str, slot: datetime) -> str:
+        conn = await self.db.connect()
+        try:
+            return await conn.fetchval(
+                "SELECT status FROM doctor_availability WHERE doctor_id = $1 AND slot_time = $2", doctor_id, slot
+            )
+        finally:
+            await conn.close()
+
+    async def test_reschedule_rejects_same_time_and_inactive_appointments(self):
+        async with self.sessions() as s:
+            await ensure_default_slots(s, await self.doctor(s))
+        day = timeutils.clinic_today() + timedelta(days=2)
+        same = await self._book("patient1", local(day, 9))
+        completed = await self._book("patient1", local(day, 13))
+        cancelled = await self._book("patient2", local(day, 17))
+        conn = await self.db.connect()
+        try:
+            await conn.execute("UPDATE appointments SET status = 'COMPLETED' WHERE id = $1", completed)
+        finally:
+            await conn.close()
+        async with self.sessions() as s:
+            await delete_appointment(appointment_id=cancelled, identity=self.identity("patient2", "PATIENT"), db=s)
+
+        cases = [
+            (same, local(day, 9), "patient1", 400),  # already at that time
+            (completed, local(day, 14), "patient1", 400),  # completed visits can't move
+            (cancelled, local(day, 18), "patient2", 404),  # cancelled visits are soft-deleted
+        ]
+        for appointment_id, slot, who, expected in cases:
+            with self.subTest(expected=expected, slot=slot):
+                with self.assertRaises(HTTPException) as ctx:
+                    await self._reschedule(appointment_id, slot, who, "PATIENT")
+                self.assertEqual(ctx.exception.status_code, expected)
+        self.assertEqual(await self._slot_status(self.ids["doctor"], local(day, 14)), "AVAILABLE")
+        self.assertEqual(await self._slot_status(self.ids["doctor"], local(day, 18)), "AVAILABLE")
+
+    async def test_doctor_cannot_reschedule_another_doctors_appointment(self):
+        async with self.sessions() as s:
+            await ensure_default_slots(s, await self.doctor(s))
+        await self._second_doctor()
+        day = timeutils.clinic_today() + timedelta(days=2)
+        appointment_id = await self._book("patient1", local(day, 10))
+
+        with self.assertRaises(HTTPException) as ctx:
+            await self._reschedule(appointment_id, local(day, 12), "admin", "DOCTOR")  # the other doctor's login
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertEqual(await self._slot_status(self.ids["doctor"], local(day, 10)), "BOOKED")
+
+    async def test_reschedule_rejects_time_the_patient_has_booked_with_another_doctor(self):
+        async with self.sessions() as s:
+            await ensure_default_slots(s, await self.doctor(s))
+        other_doctor = await self._second_doctor()
+        day = timeutils.clinic_today() + timedelta(days=2)
+        mine = await self._book("patient1", local(day, 10))
+        payload = CreateAppointmentRequest(doctor_id=other_doctor, slot=local(day, 15).isoformat(), reason="Second opinion")
+        async with self.sessions() as s:
+            await create_appointment(payload=payload, identity=self.identity("patient1", "PATIENT"), db=s)
+
+        # The first doctor is free at 3 PM, but patient1 is already with the other doctor then.
+        with self.assertRaises(HTTPException) as ctx:
+            await self._reschedule(mine, local(day, 15), "doctor", "DOCTOR")
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertEqual(await self._slot_status(self.ids["doctor"], local(day, 10)), "BOOKED")  # rolled back
+        self.assertEqual(await self._slot_status(self.ids["doctor"], local(day, 15)), "AVAILABLE")
+
+    async def test_reschedule_writes_audit_log_with_old_and_new_time(self):
+        async with self.sessions() as s:
+            await ensure_default_slots(s, await self.doctor(s))
+        day = timeutils.clinic_today() + timedelta(days=3)
+        appointment_id = await self._book("patient1", local(day, 8))
+        await self._reschedule(appointment_id, local(day, 22), "patient1", "PATIENT")
+
+        conn = await self.db.connect()
+        try:
+            # The DB audit trigger also logs a full-row UPDATE (it has an "id" key); pick the app's entry.
+            row = await conn.fetchrow(
+                """SELECT old_data->>'appointment_time' AS old, new_data->>'appointment_time' AS new, performed_by
+                   FROM audit_logs WHERE record_id = $1 AND action_type = 'UPDATE'
+                     AND new_data ? 'appointment_time' AND NOT new_data ? 'id'""",
+                appointment_id,
+            )
+        finally:
+            await conn.close()
+        self.assertEqual(datetime.fromisoformat(row["old"]), local(day, 8))
+        self.assertEqual(datetime.fromisoformat(row["new"]), local(day, 22))
+        self.assertEqual(str(row["performed_by"]), self.ids["patient1_user"])
+
     # --- clinic-local day and week views -----------------------------------------------------
 
     async def _insert_appointments(self, *times: datetime) -> None:
@@ -196,6 +429,8 @@ class CoreFlowTests(unittest.IsolatedAsyncioTestCase):
 
         times = sorted(datetime.fromisoformat(a["time"]) for a in result)
         self.assertEqual(times, [local(today, 8), local(today, 23)])
+        # The reschedule dialog needs the doctor's id and the visit reason.
+        self.assertTrue(all(a["doctor_id"] == self.ids["doctor"] and a["reason"] == "x" for a in result))
 
     async def test_doctor_week_is_monday_to_sunday_clinic_time(self):
         monday = date(2030, 6, 10)
@@ -208,6 +443,7 @@ class CoreFlowTests(unittest.IsolatedAsyncioTestCase):
 
         times = sorted(datetime.fromisoformat(a["time"]) for a in result)
         self.assertEqual(times, [local(monday, 8), sunday_11pm])
+        self.assertTrue(all(a["doctor_id"] == self.ids["doctor"] for a in result))
 
     # --- migration 004 -------------------------------------------------------------------------
 

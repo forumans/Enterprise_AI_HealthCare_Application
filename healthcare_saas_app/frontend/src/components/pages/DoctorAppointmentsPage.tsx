@@ -8,6 +8,7 @@ import React, { useState, useEffect } from "react";
 import { api } from "../../api";
 import { parseServerDate } from "../../utils";
 import type { SessionState, DoctorAppointmentRow } from "../../types/app";
+import { RescheduleAppointmentModal, type RescheduleTarget } from "../common/RescheduleAppointmentModal";
 
 interface DoctorAppointmentsPageProps {
   auth: any;
@@ -86,20 +87,22 @@ export function DoctorAppointmentsPage({ auth, appointments }: DoctorAppointment
   });
   const [selectedPatient, setSelectedPatient] = useState<DoctorAppointmentRow | null>(null);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
-  
+  const [rescheduleTarget, setRescheduleTarget] = useState<RescheduleTarget | null>(null);
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
+
+  // Load the displayed week's appointments (Monday passed as MM/DD/YYYY)
+  const reloadWeek = async () => {
+    const month = String(currentWeekStart.getMonth() + 1).padStart(2, '0');
+    const day = String(currentWeekStart.getDate()).padStart(2, '0');
+    const year = currentWeekStart.getFullYear();
+    await appointments.loadDoctorData(`${month}/${day}/${year}`);
+  };
+
   // Load appointments when component mounts or week changes
   useEffect(() => {
     const loadData = async () => {
       setLoading(true);
-      
-      // Format the Monday as MM/DD/YYYY for display
-      const month = String(currentWeekStart.getMonth() + 1).padStart(2, '0');
-      const day = String(currentWeekStart.getDate()).padStart(2, '0');
-      const year = currentWeekStart.getFullYear();
-      const displayDate = `${month}/${day}/${year}`;
-      
-      // Load the appointments with the specific date
-      await appointments.loadDoctorData(displayDate);
+      await reloadWeek();
       setLoading(false);
     };
     
@@ -160,12 +163,7 @@ export function DoctorAppointmentsPage({ auth, appointments }: DoctorAppointment
       await api.confirmAppointment(appointmentId, auth.session.accessToken);
       
       // Refresh the appointments list
-      const month = String(currentWeekStart.getMonth() + 1).padStart(2, '0');
-      const day = String(currentWeekStart.getDate()).padStart(2, '0');
-      const year = currentWeekStart.getFullYear();
-      const displayDate = `${month}/${day}/${year}`;
-      
-      await appointments.loadDoctorData(displayDate);
+      await reloadWeek();
       
       alert("Appointment confirmed successfully");
     } catch (error) {
@@ -176,6 +174,28 @@ export function DoctorAppointmentsPage({ auth, appointments }: DoctorAppointment
     }
   };
   
+  // Handle cancel appointment
+  const handleCancelAppointment = async (appointmentId: string) => {
+    if (!window.confirm("Are you sure you want to cancel this appointment?")) {
+      return;
+    }
+
+    setCancellingId(appointmentId);
+    try {
+      await api.cancelAppointment(auth.session.accessToken, appointmentId);
+      if (selectedPatient?.id === appointmentId) {
+        setSelectedPatient(null);
+      }
+      await reloadWeek();
+      alert("Appointment cancelled successfully");
+    } catch (error) {
+      console.error("Failed to cancel appointment:", error);
+      alert("Failed to cancel appointment. Please try again.");
+    } finally {
+      setCancellingId(null);
+    }
+  };
+
   return (
     <section style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
       <h2>Weekly Appointments</h2>
@@ -339,26 +359,68 @@ export function DoctorAppointmentsPage({ auth, appointments }: DoctorAppointment
                               {apt.status}
                             </div>
                           )}
-                          {apt.status === 'SCHEDULED' && (
-                            <button
-                              onClick={() => handleConfirmAppointment(apt.id)}
-                              disabled={confirmingId === apt.id}
-                              style={{
-                                background: confirmingId === apt.id ? '#94a3b8' : '#42b5f5',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: '4px',
-                                padding: '3px 10px',
-                                fontSize: '11px',
-                                cursor: 'pointer',
-                                marginTop: '5px',
-                                marginLeft: '0',
-                                fontWeight: '500'
-                              }}
-                            >
-                              {confirmingId === apt.id ? 'Confirming...' : 'Confirm'}
-                            </button>
-                          )}
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px 6px', marginTop: '5px' }}>
+                            {apt.status === 'SCHEDULED' && (
+                              <button
+                                onClick={() => handleConfirmAppointment(apt.id)}
+                                disabled={confirmingId === apt.id}
+                                style={{
+                                  background: confirmingId === apt.id ? '#94a3b8' : '#42b5f5',
+                                  color: 'white',
+                                  border: 'none',
+                                  borderRadius: '4px',
+                                  padding: '3px 10px',
+                                  fontSize: '11px',
+                                  cursor: 'pointer',
+                                  fontWeight: '500'
+                                }}
+                              >
+                                {confirmingId === apt.id ? 'Confirming...' : 'Confirm'}
+                              </button>
+                            )}
+                            {(apt.status === 'SCHEDULED' || apt.status === 'CONFIRMED') && (
+                              <button
+                                onClick={() => setRescheduleTarget({
+                                  id: apt.id,
+                                  doctorId: apt.doctor_id,
+                                  appointmentTime: apt.time,
+                                  patientName: apt.patient_name,
+                                  reason: apt.symptoms,
+                                  status: apt.status
+                                })}
+                                style={{
+                                  background: '#f0a020',
+                                  color: 'white',
+                                  border: 'none',
+                                  borderRadius: '4px',
+                                  padding: '3px 10px',
+                                  fontSize: '11px',
+                                  cursor: 'pointer',
+                                  fontWeight: '500'
+                                }}
+                              >
+                                Reschedule
+                              </button>
+                            )}
+                            {(apt.status === 'SCHEDULED' || apt.status === 'CONFIRMED') && (
+                              <button
+                                onClick={() => handleCancelAppointment(apt.id)}
+                                disabled={cancellingId === apt.id}
+                                style={{
+                                  background: cancellingId === apt.id ? '#94a3b8' : '#dc3545',
+                                  color: 'white',
+                                  border: 'none',
+                                  borderRadius: '4px',
+                                  padding: '3px 10px',
+                                  fontSize: '11px',
+                                  cursor: 'pointer',
+                                  fontWeight: '500'
+                                }}
+                              >
+                                {cancellingId === apt.id ? 'Cancelling...' : 'Cancel'}
+                              </button>
+                            )}
+                          </div>
                         </div>
                       ))
                     )}
@@ -369,6 +431,18 @@ export function DoctorAppointmentsPage({ auth, appointments }: DoctorAppointment
           </div>
         )}
       </div>
+
+      {rescheduleTarget && (
+        <RescheduleAppointmentModal
+          target={rescheduleTarget}
+          accessToken={auth.session.accessToken}
+          onClose={() => setRescheduleTarget(null)}
+          onRescheduled={async () => {
+            setSelectedPatient(null);
+            await reloadWeek();
+          }}
+        />
+      )}
     </section>
   );
 }

@@ -217,8 +217,19 @@ Authentication is via `Authorization: Bearer <token>` header unless marked **Pub
 
 ---
 
+### POST `/api/appointments/{appointment_id}/reschedule`
+**PATIENT** (own appointments) / **DOCTOR** (their appointments) — Move a `SCHEDULED` or `CONFIRMED` appointment to another available slot of the same doctor. Reason, patient, doctor and status are kept; the old slot is freed and the new one booked.
+
+```json
+{ "slot": "2026-10-25T18:00:00.000Z" }
+```
+
+Errors: `400` past time / same time / not reschedulable status, `403` not your appointment, `409` slot unavailable or the patient already has an appointment then.
+
+---
+
 ### DELETE `/api/appointments/{appointment_id}`
-**PATIENT** — Cancel an appointment (soft delete).
+**PATIENT** (own appointments) / **DOCTOR** (their appointments) — Cancel a scheduled or confirmed appointment (soft delete); the slot becomes available again. `403` if it isn't yours.
 
 ---
 

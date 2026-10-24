@@ -213,6 +213,7 @@ npx playwright show-report
 - **Migration 003:** every value is preserved; reruns, rollback and invalid data are handled safely.
 - **Slots:** 8 AM–11 PM default generation, including across daylight-saving changes; the rolling 7-day top-up; and concurrent loads.
 - **Appointments:** book → cancel → rebook through the booking trigger, double-booking rejection, and the clinic-local "today" and week views.
+- **Reschedule & cancel:** patients and doctors moving an appointment (details and status kept, old slot freed, audit logged); rejection of taken, past, same-time, completed and cross-doctor double-booked slots; ownership checks; and patients/doctors cancelling confirmed appointments.
 - **Migration 004:** the evening-slot backfill.
 
 They are **skipped** unless `HC_TEST_PG_ADMIN_URL` points at a *disposable* server. Each test creates its own `hc_it_<random>` database from `baseline_schema_pre_003.sql` and drops it afterwards, so never point it at a server holding data you care about:

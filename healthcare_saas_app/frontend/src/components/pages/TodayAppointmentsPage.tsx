@@ -9,6 +9,7 @@ import { Link } from "react-router-dom";
 import { api } from "../../api";
 import { parseServerDate } from "../../utils";
 import type { SessionState } from "../../types/app";
+import { RescheduleAppointmentModal, type RescheduleTarget } from "../common/RescheduleAppointmentModal";
 
 interface EnhancedAppointment {
   id: string;
@@ -102,21 +103,26 @@ function DoctorDetails({ session, auth }: { session: SessionState; auth: any }) 
 }
 
 export function TodayAppointmentsPage({ auth, userData, appointments }: TodayAppointmentsPageProps) {
-  const [todayAppointments, setTodayAppointments] = useState<Array<{ id: string; time: string; patient_name: string; reason: string; status: string }>>([]);
+  const [todayAppointments, setTodayAppointments] = useState<Array<{ id: string; doctor_id: string; time: string; patient_name: string; reason: string; status: string }>>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [rescheduleTarget, setRescheduleTarget] = useState<RescheduleTarget | null>(null);
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
+
+  // Fetch, keep confirmed and scheduled appointments, and sort by time
+  const refreshTodayAppointments = async () => {
+    const data = await api.getTodayAppointments(auth.session.accessToken);
+    const validAppointments = data.filter(apt => apt.status === 'CONFIRMED' || apt.status === 'SCHEDULED');
+    validAppointments.sort((a, b) => parseServerDate(a.time).getTime() - parseServerDate(b.time).getTime());
+    setTodayAppointments(validAppointments);
+  };
 
   useEffect(() => {
     const loadTodayAppointments = async () => {
       setLoading(true);
       try {
-        const data = await api.getTodayAppointments(auth.session.accessToken);
-        // Filter both confirmed and scheduled appointments
-        const validAppointments = data.filter(apt => apt.status === 'CONFIRMED' || apt.status === 'SCHEDULED');
-        // Sort by time
-        validAppointments.sort((a, b) => parseServerDate(a.time).getTime() - parseServerDate(b.time).getTime());
-        setTodayAppointments(validAppointments);
+        await refreshTodayAppointments();
       } catch (err) {
         setError("Failed to load today's appointments");
         console.error("Error loading appointments:", err);
@@ -143,10 +149,7 @@ export function TodayAppointmentsPage({ auth, userData, appointments }: TodayApp
       await api.confirmAppointment(appointmentId, auth.session.accessToken);
       
       // Refresh the appointments list
-      const data = await api.getTodayAppointments(auth.session.accessToken);
-      const validAppointments = data.filter(apt => apt.status === 'CONFIRMED' || apt.status === 'SCHEDULED');
-      validAppointments.sort((a, b) => parseServerDate(a.time).getTime() - parseServerDate(b.time).getTime());
-      setTodayAppointments(validAppointments);
+      await refreshTodayAppointments();
       
       alert("Appointment confirmed successfully");
     } catch (error) {
@@ -154,6 +157,24 @@ export function TodayAppointmentsPage({ auth, userData, appointments }: TodayApp
       alert("Failed to confirm appointment. Please try again.");
     } finally {
       setConfirmingId(null);
+    }
+  };
+
+  const handleCancelAppointment = async (appointmentId: string) => {
+    if (!window.confirm("Are you sure you want to cancel this appointment?")) {
+      return;
+    }
+
+    setCancellingId(appointmentId);
+    try {
+      await api.cancelAppointment(auth.session.accessToken, appointmentId);
+      await refreshTodayAppointments();
+      alert("Appointment cancelled successfully");
+    } catch (error) {
+      console.error("Failed to cancel appointment:", error);
+      alert("Failed to cancel appointment. Please try again.");
+    } finally {
+      setCancellingId(null);
     }
   };
 
@@ -226,7 +247,7 @@ export function TodayAppointmentsPage({ auth, userData, appointments }: TodayApp
                         disabled={confirmingId === appointment.id}
                         style={{
                           padding: '6px 12px',
-                          backgroundColor: confirmingId === appointment.id ? '#94a3b8' : '#42b5f5',
+                          background: confirmingId === appointment.id ? '#94a3b8' : '#42b5f5',
                           color: 'white',
                           border: 'none',
                           borderRadius: '4px',
@@ -238,7 +259,49 @@ export function TodayAppointmentsPage({ auth, userData, appointments }: TodayApp
                         {confirmingId === appointment.id ? 'Confirming...' : 'Confirm'}
                       </button>
                     )}
-                    <Link 
+                    {(appointment.status === 'SCHEDULED' || appointment.status === 'CONFIRMED') && (
+                      <button
+                        onClick={() => setRescheduleTarget({
+                          id: appointment.id,
+                          doctorId: appointment.doctor_id,
+                          appointmentTime: appointment.time,
+                          patientName: appointment.patient_name,
+                          reason: appointment.reason,
+                          status: appointment.status
+                        })}
+                        style={{
+                          padding: '6px 12px',
+                          background: '#f0a020',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '4px',
+                          fontSize: '12px',
+                          fontWeight: '500',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        Reschedule
+                      </button>
+                    )}
+                    {(appointment.status === 'SCHEDULED' || appointment.status === 'CONFIRMED') && (
+                      <button
+                        onClick={() => handleCancelAppointment(appointment.id)}
+                        disabled={cancellingId === appointment.id}
+                        style={{
+                          padding: '6px 12px',
+                          background: cancellingId === appointment.id ? '#94a3b8' : '#dc3545',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '4px',
+                          fontSize: '12px',
+                          fontWeight: '500',
+                          cursor: cancellingId === appointment.id ? 'not-allowed' : 'pointer'
+                        }}
+                      >
+                        {cancellingId === appointment.id ? 'Cancelling...' : 'Cancel'}
+                      </button>
+                    )}
+                    <Link
                       to={`/doctors/consultation/${appointment.id}`}
                       style={{
                         display: 'inline-block',
@@ -262,6 +325,15 @@ export function TodayAppointmentsPage({ auth, userData, appointments }: TodayApp
           </div>
         )}
       </div>
+
+      {rescheduleTarget && (
+        <RescheduleAppointmentModal
+          target={rescheduleTarget}
+          accessToken={auth.session.accessToken}
+          onClose={() => setRescheduleTarget(null)}
+          onRescheduled={refreshTodayAppointments}
+        />
+      )}
     </section>
   );
 }

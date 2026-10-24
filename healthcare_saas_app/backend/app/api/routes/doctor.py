@@ -507,8 +507,10 @@ async def doctor_appointments_today(
     return [
         {
             "id": appointment.id,
+            "doctor_id": appointment.doctor_id,
             "time": appointment.appointment_time.isoformat(),
             "patient_name": patient.full_name,
+            "reason": appointment.notes or "",
             "status": appointment.status,
             "urgent": "",
         }
@@ -566,6 +568,7 @@ async def doctor_all_appointments(
     result = [
         {
             "id": appointment.id,
+            "doctor_id": appointment.doctor_id,
             "time": appointment.appointment_time.isoformat(),
             "patient_name": patient.full_name,
             "symptoms": appointment.notes or "",

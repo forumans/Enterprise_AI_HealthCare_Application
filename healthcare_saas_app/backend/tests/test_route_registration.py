@@ -33,6 +33,10 @@ class RouteRegistrationTests(unittest.TestCase):
         self.assertEqual(_handler_for("/api/doctor/appointments/all"), "doctor_all_appointments")
         self.assertEqual(_handler_for("/api/doctor/appointments/3f1c-uuid"), "doctor_get_appointment_details")
 
+    def test_reschedule_and_cancel_routes_are_registered(self):
+        self.assertEqual(_handler_for("/api/appointments/3f1c-uuid/reschedule", "POST"), "reschedule_appointment_route")
+        self.assertEqual(_handler_for("/api/appointments/3f1c-uuid", "DELETE"), "delete_appointment")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -7,6 +7,7 @@
 export { LabeledField } from "./common/LabeledField";
 export { ProtectedRoute } from "./common/ProtectedRoute";
 export { StatusMessage } from "./common/StatusMessage";
+export { RescheduleAppointmentModal } from "./common/RescheduleAppointmentModal";
 
 // Layout components
 export { AppHeader } from "./layout/AppHeader";

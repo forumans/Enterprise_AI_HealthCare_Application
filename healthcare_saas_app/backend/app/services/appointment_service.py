@@ -63,3 +63,63 @@ async def book_appointment(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Appointment conflicts with existing booking.") from exc
 
     return record
+
+
+async def reschedule_appointment(
+    db: AsyncSession,
+    *,
+    appointment: Appointment,
+    new_time: datetime,
+) -> datetime:
+    """Move an appointment to another slot of the same doctor, keeping every other detail.
+
+    The sync_doctor_availability trigger only reacts to inserts, deletes and cancellations, so a
+    time change has to free the old slot and book the new one here. Returns the previous time.
+    """
+
+    if new_time == appointment.appointment_time:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Appointment is already at that time.")
+
+    new_slot = (
+        await db.execute(
+            select(DoctorAvailability)
+            .where(
+                and_(
+                    DoctorAvailability.tenant_id == appointment.tenant_id,
+                    DoctorAvailability.doctor_id == appointment.doctor_id,
+                    DoctorAvailability.slot_time == new_time,
+                )
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if new_slot is None or new_slot.status != "AVAILABLE":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Requested slot is not available.")
+
+    old_slot = (
+        await db.execute(
+            select(DoctorAvailability)
+            .where(
+                and_(
+                    DoctorAvailability.doctor_id == appointment.doctor_id,
+                    DoctorAvailability.slot_time == appointment.appointment_time,
+                )
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+
+    old_time = appointment.appointment_time
+    appointment.appointment_time = new_time
+    appointment.slot_id = new_slot.id
+    new_slot.status = "BOOKED"
+    if old_slot is not None and old_slot.status == "BOOKED":
+        old_slot.status = "AVAILABLE"
+
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        # unique_patient_time: the patient already has another appointment at the new time.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Appointment conflicts with existing booking.") from exc
+
+    return old_time

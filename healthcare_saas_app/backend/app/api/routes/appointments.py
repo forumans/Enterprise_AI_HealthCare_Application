@@ -13,7 +13,7 @@ from ...core.dependencies import CurrentIdentity, get_current_identity, require_
 from ...core.database import get_db
 from ...core.timeutils import clinic_today, clinic_week_bounds, parse_client_datetime, utc_now
 from ...models import Appointment, Patient, Doctor, DoctorAvailability
-from ...services.appointment_service import book_appointment
+from ...services.appointment_service import book_appointment, reschedule_appointment
 from ...services.audit_service import write_audit_log
 
 router = APIRouter()
@@ -27,6 +27,10 @@ class CreateAppointmentRequest(BaseModel):
 
 class UpdateAppointmentStatusRequest(BaseModel):
     status: str
+
+
+class RescheduleAppointmentRequest(BaseModel):
+    slot: str = Field(description="ISO datetime string for the new appointment_time")
 
 
 def _week_bounds(from_date: date | None) -> tuple[datetime, datetime]:
@@ -282,7 +286,20 @@ async def delete_appointment(
         ).scalar_one_or_none()
         if patient is None or row.patient_id != patient.id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to cancel this appointment.")
+    elif role == "DOCTOR":
+        doctor_id = (
+            await db.execute(
+                select(Doctor.id).where(
+                    Doctor.user_id == identity.user_id,
+                    Doctor.tenant_id == identity.tenant_id,
+                    Doctor.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if doctor_id != row.doctor_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to cancel this appointment.")
 
+    old_status = row.status
     row.deleted_at = utc_now()
     row.deleted_by = identity.user_id
     row.status = "CANCELLED"
@@ -297,7 +314,7 @@ async def delete_appointment(
         table_name="appointments",
         record_id=row.id,
         action_type="DELETE",
-        old_data={"status": "SCHEDULED"},
+        old_data={"status": old_status},
         new_data={"status": "CANCELLED"},
         performed_by=identity.user_id,
     )
@@ -345,5 +362,71 @@ async def confirm_appointment(
     )
     await db.commit()
     return {"message": "Appointment confirmed successfully."}
+
+
+@router.post("/appointments/{appointment_id}/reschedule")
+async def reschedule_appointment_route(
+    appointment_id: str,
+    payload: RescheduleAppointmentRequest,
+    identity: CurrentIdentity = Depends(require_roles("PATIENT", "DOCTOR")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Move an appointment to a different slot with the same doctor; reason, patient and status are kept."""
+
+    try:
+        new_time = parse_client_datetime(payload.slot)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid slot timestamp.") from exc
+    if new_time <= utc_now():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot reschedule to a time in the past.")
+
+    appointment = (
+        await db.execute(
+            select(Appointment)
+            .where(
+                Appointment.id == appointment_id,
+                Appointment.tenant_id == identity.tenant_id,
+                Appointment.deleted_at.is_(None),
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if appointment is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Appointment not found.")
+
+    if (identity.role or "").upper() == "PATIENT":
+        owner = select(Patient.id).where(
+            Patient.user_id == identity.user_id,
+            Patient.tenant_id == identity.tenant_id,
+            Patient.deleted_at.is_(None),
+        )
+        expected_owner = appointment.patient_id
+    else:
+        owner = select(Doctor.id).where(
+            Doctor.user_id == identity.user_id,
+            Doctor.tenant_id == identity.tenant_id,
+            Doctor.deleted_at.is_(None),
+        )
+        expected_owner = appointment.doctor_id
+    if (await db.execute(owner)).scalar_one_or_none() != expected_owner:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to reschedule this appointment.")
+
+    if appointment.status not in {"SCHEDULED", "CONFIRMED"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only scheduled or confirmed appointments can be rescheduled.")
+
+    old_time = await reschedule_appointment(db, appointment=appointment, new_time=new_time)
+
+    await write_audit_log(
+        db,
+        tenant_id=identity.tenant_id,
+        table_name="appointments",
+        record_id=appointment.id,
+        action_type="UPDATE",
+        old_data={"appointment_time": old_time.isoformat()},
+        new_data={"appointment_time": new_time.isoformat()},
+        performed_by=identity.user_id,
+    )
+    await db.commit()
+    return {"id": appointment.id, "appointment_time": new_time.isoformat(), "status": appointment.status}
 
 

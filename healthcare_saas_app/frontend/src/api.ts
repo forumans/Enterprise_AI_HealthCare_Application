@@ -449,8 +449,15 @@ export const api = {
       ...(token && { headers: withAuth(token) }),
     }),
 
+  rescheduleAppointment: (token: string, appointmentId: string, slot: string) =>
+    request<{ id: string; appointment_time: string; status: string }>(`/appointments/${appointmentId}/reschedule`, {
+      method: "POST",
+      headers: withAuth(token),
+      body: JSON.stringify({ slot }),
+    }),
+
   getTodayAppointments: (token?: string) =>
-    request<Array<{ id: string; time: string; patient_name: string; reason: string; status: string }>>('/doctor/appointments/today', {
+    request<Array<{ id: string; doctor_id: string; time: string; patient_name: string; reason: string; status: string }>>('/doctor/appointments/today', {
       method: "GET",
       ...(token && { headers: withAuth(token) }),
     }),

@@ -7,8 +7,9 @@
 
 import React, { useState, useEffect } from "react";
 import { api } from "../../api";
-import { OFFICE_HOUR_SLOTS, parseServerDate, removeCancelledBooking } from "../../utils";
+import { OFFICE_HOUR_SLOTS, isAppointmentUpcoming, parseServerDate, removeCancelledBooking } from "../../utils";
 import type { SessionState, AppointmentRow } from "../../types/app";
+import { RescheduleAppointmentModal, type RescheduleTarget } from "../common/RescheduleAppointmentModal";
 
 interface PatientAppointmentsPageProps {
   auth: any;
@@ -33,6 +34,7 @@ export function PatientAppointmentsPage({ auth, appointments, userData }: Patien
   const [bookedAppointments, setBookedAppointments] = useState<Array<{ slot_time: string }>>([]);
   const [appointmentReason, setAppointmentReason] = useState("");
   const [patientAppointments, setPatientAppointments] = useState<Array<any>>([]);
+  const [rescheduleTarget, setRescheduleTarget] = useState<RescheduleTarget | null>(null);
 
   useEffect(() => {
     // Load patient appointments and doctors
@@ -101,12 +103,13 @@ export function PatientAppointmentsPage({ auth, appointments, userData }: Patien
   }, [selectedDoctorId, auth.session.accessToken, availabilityRefreshKey]);
 
   // Filter and sort upcoming and past appointments
+  const now = new Date();
   const upcomingAppointments = appointments.appointments
-    .filter((apt: AppointmentRow) => parseServerDate(apt.appointment_time) > new Date())
+    .filter((apt: AppointmentRow) => isAppointmentUpcoming(apt, now))
     .sort((a: AppointmentRow, b: AppointmentRow) => parseServerDate(a.appointment_time).getTime() - parseServerDate(b.appointment_time).getTime());
 
   const pastAppointments = appointments.appointments
-    .filter((apt: AppointmentRow) => parseServerDate(apt.appointment_time) <= new Date())
+    .filter((apt: AppointmentRow) => !isAppointmentUpcoming(apt, now))
     .sort((a: AppointmentRow, b: AppointmentRow) => parseServerDate(b.appointment_time).getTime() - parseServerDate(a.appointment_time).getTime());
 
   // Limit past appointments to 5 unless "show more" is clicked
@@ -181,6 +184,16 @@ export function PatientAppointmentsPage({ auth, appointments, userData }: Patien
     } finally {
       setCancellingId(null);
     }
+  };
+
+  // Refresh everything that shows the old/new slot after a reschedule
+  const handleRescheduled = async () => {
+    await appointments.loadPatientAppointments();
+    setBookedAppointments([]);
+    api.listAllAppointments(auth.session.accessToken)
+      .then(setPatientAppointments)
+      .catch((err) => console.error("Failed to refresh appointments:", err));
+    setAvailabilityRefreshKey(prev => prev + 1);
   };
 
   // Calendar functionality
@@ -552,8 +565,33 @@ export function PatientAppointmentsPage({ auth, appointments, userData }: Patien
                               {apt.status}
                             </span>
                           </td>
-                          <td style={{ padding: '12px', textAlign: 'center', border: '1px solid rgba(136, 194, 227, 0.36)' }}>
-                            {apt.status === 'SCHEDULED' && (
+                          <td style={{ padding: '12px', textAlign: 'center', border: '1px solid rgba(136, 194, 227, 0.36)', whiteSpace: 'nowrap' }}>
+                            {(apt.status === 'SCHEDULED' || apt.status === 'CONFIRMED') && (
+                              <button
+                                onClick={() => setRescheduleTarget({
+                                  id: apt.id,
+                                  doctorId: apt.doctor_id,
+                                  doctorName: apt.doctor_name,
+                                  appointmentTime: apt.appointment_time!,
+                                  reason: apt.notes,
+                                  status: apt.status
+                                })}
+                                style={{
+                                  background: '#f0a020',
+                                  color: 'white',
+                                  border: 'none',
+                                  borderRadius: '4px',
+                                  padding: '6px 12px',
+                                  fontSize: '12px',
+                                  cursor: 'pointer',
+                                  fontWeight: '500',
+                                  marginRight: '8px'
+                                }}
+                              >
+                                Reschedule
+                              </button>
+                            )}
+                            {(apt.status === 'SCHEDULED' || apt.status === 'CONFIRMED') && (
                               <button
                                 onClick={() => handleCancelAppointment(apt.id)}
                                 disabled={cancellingId === apt.id}
@@ -659,6 +697,18 @@ export function PatientAppointmentsPage({ auth, appointments, userData }: Patien
             </div>
           </div>
         </>
+      )}
+
+      {rescheduleTarget && (
+        <RescheduleAppointmentModal
+          target={rescheduleTarget}
+          accessToken={auth.session.accessToken}
+          onClose={() => setRescheduleTarget(null)}
+          onRescheduled={handleRescheduled}
+          conflictingTimes={appointments.appointments
+            .filter((apt: AppointmentRow) => apt.id !== rescheduleTarget.id && (apt.status === 'SCHEDULED' || apt.status === 'CONFIRMED'))
+            .map((apt: AppointmentRow) => apt.appointment_time)}
+        />
       )}
     </section>
   );

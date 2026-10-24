@@ -123,6 +123,44 @@ export const OFFICE_HOUR_SLOTS: string[] = Array.from(
   }
 );
 
+/** Length of one booking slot; the grids are hourly. */
+export const SLOT_DURATION_MINUTES = 60;
+
+/**
+ * An appointment stays "upcoming" until its slot has ended, so a visit that is in progress
+ * (e.g. 10:01 PM for a 10 PM slot) isn't moved to past. Completed/cancelled visits never are.
+ */
+export function isAppointmentUpcoming(apt: { appointment_time?: string; status?: string }, now: Date = new Date()): boolean {
+  if (!apt.appointment_time || apt.status === 'COMPLETED' || apt.status === 'CANCELLED') return false;
+  const end = parseServerDate(apt.appointment_time).getTime() + SLOT_DURATION_MINUTES * 60_000;
+  return end > now.getTime();
+}
+
+/**
+ * Local wall-clock key ("2026-10-22T23:00:00") for the hourly calendar cell an instant falls in.
+ * Booking grids are laid out in the browser's time zone, so API timestamps are matched to cells by this key.
+ */
+export function localSlotKey(date: Date): string {
+  return `${date.getFullYear().toString().padStart(4, '0')}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}T${date.getHours().toString().padStart(2, '0')}:00:00`;
+}
+
+export type RescheduleSlotState = 'past' | 'current' | 'available' | 'unavailable';
+
+/**
+ * State of one hourly cell in the reschedule calendar. Only future cells the doctor has AVAILABLE,
+ * that aren't the appointment's current time or another booking of the same patient, can be picked.
+ */
+export function rescheduleSlotState(
+  cell: Date,
+  ctx: { now: Date; currentKey: string; statusByKey: Map<string, string>; conflictKeys: Set<string> }
+): RescheduleSlotState {
+  const key = localSlotKey(cell);
+  if (cell.getTime() <= ctx.now.getTime()) return 'past';
+  if (key === ctx.currentKey) return 'current';
+  if (!ctx.conflictKeys.has(key) && ctx.statusByKey.get(key) === 'AVAILABLE') return 'available';
+  return 'unavailable';
+}
+
 /**
  * Removes the calendar cell booked in this session for an appointment that was just cancelled.
  * `booked` holds local calendar-cell strings ("2026-10-22T23:00:00") while the API returns UTC

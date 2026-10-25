@@ -9,7 +9,9 @@ context: |
   Database: RDS PostgreSQL (SQLAlchemy 2.0 async + asyncpg), no Alembic — versioned SQL migrations
   Auth: JWT HS256, stateless; token stored in React Context only (never localStorage)
   Multi-tenancy: tenant_id claim in JWT scopes every DB query
-  RBAC roles: PATIENT, DOCTOR, ADMIN — enforced via require_roles() dependency at backend
+  RBAC roles: PATIENT, DOCTOR, SUPPORT_STAFF, ADMIN — enforced via require_roles() dependency at backend
+  Requirements: openspec/specs/ (start at README.md; known code gaps in 13-known-gaps-and-decisions.md)
+  Scheduling: hourly slots 8 AM-11 PM in CLINIC_TIMEZONE (default America/New_York), times stored in UTC
   Password hashing: PBKDF2-HMAC-SHA256, 120,000 iterations, 16-byte random salt
   Lambda DB pooling: pool_size=1, max_overflow=0 (prevents RDS connection exhaustion)
   Document storage: S3 private bucket, presigned URLs for download

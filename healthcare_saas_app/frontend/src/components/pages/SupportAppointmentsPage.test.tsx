@@ -156,7 +156,7 @@ describe("SupportAppointmentsPage (patient mode)", () => {
     await waitFor(() => expect(scrolled).toContain(bookingWith.parentElement));
 
     await bookTomorrowAt3();
-    await waitFor(() => expect(scrolled.at(-1)).toBe(appointmentRow("Booked by phone call")));
+    await waitFor(() => expect(scrolled[scrolled.length - 1]).toBe(appointmentRow("Booked by phone call")));
     expectOnlyUpcomingListOpen();
   });
 });
@@ -192,7 +192,7 @@ describe("SupportAppointmentsPage (doctor mode)", () => {
     await waitFor(() => expect(scrolled).toContain(bookingWith.parentElement));
 
     await bookTomorrowAt3();
-    await waitFor(() => expect(scrolled.at(-1)).toBe(appointmentRow("Booked by phone call")));
+    await waitFor(() => expect(scrolled[scrolled.length - 1]).toBe(appointmentRow("Booked by phone call")));
     expectOnlyUpcomingListOpen();
   });
 });

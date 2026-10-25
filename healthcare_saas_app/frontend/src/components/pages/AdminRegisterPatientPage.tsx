@@ -109,8 +109,8 @@ export function AdminRegisterPatientPage({ auth }: AdminRegisterPatientPageProps
     if (!/^\+?[0-9\-\s]{10,15}$/.test(phone)) {
       nextErrors.phone = "Phone should be 10-15 digits.";
     }
-    if (password.length < 5) {
-      nextErrors.password = "Password must be at least 5 characters.";
+    if (password.length < 8) {
+      nextErrors.password = "Password must be at least 8 characters long.";
     }
     if (!gender) {
       nextErrors.gender = "Gender is required.";
@@ -261,7 +261,7 @@ export function AdminRegisterPatientPage({ auth }: AdminRegisterPatientPageProps
           <LabeledField
             id="patient-password"
             label="Password"
-            helpText="Minimum 5 characters."
+            helpText="Minimum 8 characters."
             value={password}
             onChange={setPassword}
             type="password"

@@ -6,23 +6,22 @@ import {
 } from "./systemDashboardStats";
 
 describe("buildSystemStats", () => {
-  it("counts only active, non-deleted doctor and patient users", () => {
-    const users = [
-      { id: "1", role: "DOCTOR", is_deleted: false, deleted_at: null, is_active: true },
-      { id: "2", role: "DOCTOR", is_deleted: true, deleted_at: "2026-01-01", is_active: true },
-      { id: "3", role: "PATIENT", is_deleted: false, deleted_at: null, is_active: true },
-      { id: "4", role: "PATIENT", is_deleted: false, deleted_at: null, is_active: false },
-      { id: "5", role: "ADMIN", is_deleted: false, deleted_at: null, is_active: true },
-    ] as any;
+  it("uses the server-side doctor and patient counts (not a paged user list)", () => {
+    const stats = buildSystemStats({ doctor_count: 42, patient_count: 1250 }, defaultAppointmentMetrics);
 
-    const stats = buildSystemStats(users, defaultAppointmentMetrics);
+    expect(stats.totalDoctors).toBe(42);
+    expect(stats.totalPatients).toBe(1250);
+  });
 
-    expect(stats.totalDoctors).toBe(1);
-    expect(stats.totalPatients).toBe(1);
+  it("shows zero when the counts haven't loaded", () => {
+    const stats = buildSystemStats(null, defaultAppointmentMetrics);
+
+    expect(stats.totalDoctors).toBe(0);
+    expect(stats.totalPatients).toBe(0);
   });
 
   it("maps appointment metric totals directly into dashboard stats", () => {
-    const stats = buildSystemStats([], {
+    const stats = buildSystemStats({}, {
       total_appointments_to_date: 100,
       total_appointments_year_to_date: 80,
       total_appointments_this_month: 20,

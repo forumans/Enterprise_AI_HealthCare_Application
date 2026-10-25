@@ -227,7 +227,9 @@ npx playwright show-report
 - **Admin accounts:** role-based user search, changing login email and resetting password by user id, deactivating/activating (no self-deactivation, at least one active admin), and soft delete.
 - **Permissions:** who may change which appointments and slots; booked slots can't be blocked or deleted.
 - **Migration 004:** the evening-slot backfill.
-- **End-to-end HTTP (`test_http_flows.py`):** starts the real backend with uvicorn on a free local port and drives the support staff, admin account and permission flows through login, JWTs, middleware and role guards.
+- **Row-level security (`test_row_level_security.py`, migration 007):** connects as a non-superuser role and proves tenant tables only show and accept the current tenant's rows, the cross-tenant lookup functions (login, email uniqueness, setup status) work, and self-registration picks the clinic by web address.
+- **Access-control safeguards (`test_hardening.py`):** admin bootstrap, document/record/prescription ownership, upload limits, tenant endpoints, availability window, audit entries and delete protections.
+- **End-to-end HTTP (`test_http_flows.py`):** starts the real backend with uvicorn on a free local port, connected as a non-superuser role so row-level security applies, and drives the support staff, admin account and permission flows through login, JWTs, middleware and role guards.
 
 Database-free unit tests (always run) cover route role guards (`test_role_access.py`), the shared search helper and request validation (`test_search_and_validation.py`), and route registration.
 

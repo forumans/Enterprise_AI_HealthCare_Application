@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...core.dependencies import CurrentIdentity, get_current_identity, require_roles
 from ...core.database import get_db
 from ...models import Appointment, MedicalRecord, Patient, Prescription, User, Doctor
-from ...services.audit_service import write_audit_log
+from ...services.audit_service import write_access_log, write_audit_log
 from ..search_utils import is_wildcard, search_limit
 
 router = APIRouter(prefix="/patients")
@@ -136,6 +136,11 @@ async def search_patients(
         .limit(search_limit(query))
     )
     rows = (await db.execute(stmt)).all()
+    # Search results include clinical history: record which patients' data this staff member saw
+    for viewed_id in dict.fromkeys(patient.id for patient, *_ in rows):
+        await write_access_log(db, identity, table_name="patients", record_id=viewed_id)
+    if rows:
+        await db.commit()
     return [
         {
             "id": str(patient.id),
@@ -214,6 +219,9 @@ async def get_all_patient_prescriptions(
         .order_by(Appointment.appointment_time.desc())
     )
     rows = (await db.execute(stmt)).all()
+    if rows:
+        await write_access_log(db, identity, table_name="patients", record_id=rows[0][0].id)
+        await db.commit()
     return [
         {
             "id": str(patient.id),

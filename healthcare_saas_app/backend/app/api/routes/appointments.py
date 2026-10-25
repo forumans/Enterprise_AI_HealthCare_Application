@@ -169,37 +169,25 @@ async def list_appointments(
     ]
 
 
-@router.get("/appointments/all")
-async def list_all_appointments(
-    identity: CurrentIdentity = Depends(get_current_identity),
-    db: AsyncSession = Depends(get_db),
-) -> list[dict]:
-    """Get all appointments for the current user without date filtering."""
-    stmt = select(Appointment).where(
-        Appointment.tenant_id == identity.tenant_id,
-        Appointment.deleted_at.is_(None),
-    )
+async def _appointments_with_doctor_names(db: AsyncSession, identity: CurrentIdentity, *conditions, unknown_doctor: str | None) -> list[dict]:
+    """The caller's visible appointments (see _scope_to_caller) with doctor names, in one joined query."""
 
+    stmt = (
+        select(Appointment, Doctor.full_name)
+        .outerjoin(
+            Doctor,
+            and_(Doctor.id == Appointment.doctor_id, Doctor.tenant_id == identity.tenant_id, Doctor.deleted_at.is_(None)),
+        )
+        .where(Appointment.tenant_id == identity.tenant_id, Appointment.deleted_at.is_(None), *conditions)
+    )
     # Patients and doctors see only their own appointments; admins and support staff the tenant's
     stmt = _scope_to_caller(stmt, identity, await _caller_profile_id(db, identity))
     if stmt is None:
         return []
 
-    rows = (await db.execute(stmt.order_by(Appointment.appointment_time.asc()))).scalars().all()
-    
-    # Fetch doctor names and notes for all appointments
-    result = []
-    for row in rows:
-        doctor = (
-            await db.execute(
-                select(Doctor).where(
-                    Doctor.id == row.doctor_id,
-                    Doctor.deleted_at.is_(None),
-                )
-            )
-        ).scalar_one_or_none()
-        
-        result.append({
+    rows = (await db.execute(stmt.order_by(Appointment.appointment_time.asc()))).all()
+    return [
+        {
             "id": row.id,
             "doctor_id": row.doctor_id,
             "patient_id": row.patient_id,
@@ -207,10 +195,19 @@ async def list_all_appointments(
             "appointment_time": row.appointment_time.isoformat(),
             "status": row.status,
             "notes": row.notes,
-            "doctor_name": doctor.full_name if doctor else "Unknown Doctor",
-        })
-    
-    return result
+            "doctor_name": doctor_name or unknown_doctor,
+        }
+        for row, doctor_name in rows
+    ]
+
+
+@router.get("/appointments/all")
+async def list_all_appointments(
+    identity: CurrentIdentity = Depends(get_current_identity),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """Get all appointments for the current user without date filtering."""
+    return await _appointments_with_doctor_names(db, identity, unknown_doctor="Unknown Doctor")
 
 
 @router.get("/appointments/week")
@@ -220,44 +217,9 @@ async def list_weekly_appointments(
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     start, end = _week_bounds(from_date)
-    stmt = select(Appointment).where(
-        Appointment.tenant_id == identity.tenant_id,
-        Appointment.appointment_time >= start,
-        Appointment.appointment_time < end,
-        Appointment.deleted_at.is_(None),
+    return await _appointments_with_doctor_names(
+        db, identity, Appointment.appointment_time >= start, Appointment.appointment_time < end, unknown_doctor=None,
     )
-
-    # Patients and doctors see only their own appointments; admins and support staff the tenant's
-    stmt = _scope_to_caller(stmt, identity, await _caller_profile_id(db, identity))
-    if stmt is None:
-        return []
-
-    rows = (await db.execute(stmt.order_by(Appointment.appointment_time.asc()))).scalars().all()
-    
-    # Fetch doctor names and notes for all appointments
-    result = []
-    for row in rows:
-        doctor = (
-            await db.execute(
-                select(Doctor).where(
-                    Doctor.id == row.doctor_id,
-                    Doctor.deleted_at.is_(None),
-                )
-            )
-        ).scalar_one_or_none()
-        
-        result.append({
-            "id": row.id,
-            "doctor_id": row.doctor_id,
-            "patient_id": row.patient_id,
-            "slot_id": row.slot_id,
-            "appointment_time": row.appointment_time.isoformat(),
-            "status": row.status,
-            "doctor_name": doctor.full_name if doctor else None,
-            "notes": row.notes,
-        })
-    
-    return result
 
 
 @router.patch("/appointments/{appointment_id}/status")

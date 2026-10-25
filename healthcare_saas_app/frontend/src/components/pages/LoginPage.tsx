@@ -10,6 +10,7 @@ import { LabeledField } from "../common/LabeledField";
 import { StatusMessage } from "../common/StatusMessage";
 import { useAuthContext } from "../../contexts/AuthContext";
 import { validateEmail } from "../../utils";
+import { api } from "../../api";
 import type { LoginRole } from "../../contexts/AuthContext";
 
 interface LoginPageProps {
@@ -21,6 +22,15 @@ export function LoginPage({ role }: LoginPageProps) {
   // Set when the user was signed out because the server ended their session
   const notice = (useLocation().state as { notice?: string } | null)?.notice ?? "";
   const [submitAttempted, setSubmitAttempted] = React.useState(false);
+  // Admin login offers first-time setup only while the deployment has no administrator yet
+  const [adminSetupRequired, setAdminSetupRequired] = React.useState(false);
+
+  React.useEffect(() => {
+    if (role !== "ADMIN") return;
+    api.getAdminSetupStatus()
+      .then(result => setAdminSetupRequired(result.setup_required))
+      .catch(() => setAdminSetupRequired(false));
+  }, [role]);
 
   // Clear any existing status messages when navigating to login page
   React.useEffect(() => {
@@ -44,12 +54,19 @@ export function LoginPage({ role }: LoginPageProps) {
           registerText: "New doctor? Register here"
         };
       case "ADMIN":
-        return {
-          title: "Admin Login",
-          subtitle: "System administration and management",
-          registerLink: "/admin/register-admin",
-          registerText: "First time setup? Register admin"
-        };
+        return adminSetupRequired
+          ? {
+              title: "Admin Login",
+              subtitle: "System administration and management",
+              registerLink: "/admin/setup",
+              registerText: "First time setup? Create the first administrator"
+            }
+          : {
+              title: "Admin Login",
+              subtitle: "System administration and management",
+              registerLink: null,
+              registerText: "Administrator accounts are created by an existing administrator"
+            };
       case "SUPPORT_STAFF":
         return {
           title: "Support Staff Login",

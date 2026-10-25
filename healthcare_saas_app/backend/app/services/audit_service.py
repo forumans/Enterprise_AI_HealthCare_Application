@@ -39,3 +39,18 @@ async def write_audit_log(
             performed_by=performed_by,
         )
     )
+
+
+async def write_access_log(db: AsyncSession, identity, *, table_name: str, record_id: str) -> None:
+    """Record that a staff member viewed clinical data (accounting of disclosures). Caller commits."""
+
+    await write_audit_log(
+        db,
+        tenant_id=identity.tenant_id,
+        table_name=table_name,
+        record_id=record_id,
+        action_type="READ",
+        old_data=None,
+        new_data={"viewer_role": identity.role},
+        performed_by=identity.user_id,
+    )

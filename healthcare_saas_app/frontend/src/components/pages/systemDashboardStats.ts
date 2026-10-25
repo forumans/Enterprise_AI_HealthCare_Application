@@ -1,4 +1,10 @@
-import type { AdminUserRow, AppointmentMetrics } from "../../types/app";
+import type { AppointmentMetrics } from "../../types/app";
+
+/** Server-side counts from GET /admin/reports (active, non-deleted people of the whole clinic). */
+export interface PeopleCounts {
+  doctor_count?: number;
+  patient_count?: number;
+}
 
 export interface SystemStats {
   totalDoctors: number;
@@ -19,16 +25,12 @@ export const defaultAppointmentMetrics: AppointmentMetrics = {
 };
 
 export function buildSystemStats(
-  users: AdminUserRow[],
+  counts: PeopleCounts | null | undefined,
   appointmentMetrics: AppointmentMetrics,
 ): SystemStats {
-  const activeUsers = users.filter(
-    (user) => user.is_deleted !== true && user.deleted_at == null && user.is_active !== false,
-  );
-
   return {
-    totalDoctors: activeUsers.filter((user) => user.role === "DOCTOR").length,
-    totalPatients: activeUsers.filter((user) => user.role === "PATIENT").length,
+    totalDoctors: counts?.doctor_count ?? 0,
+    totalPatients: counts?.patient_count ?? 0,
     totalAppointmentsToDate: appointmentMetrics.total_appointments_to_date,
     totalAppointmentsYearToDate: appointmentMetrics.total_appointments_year_to_date,
     totalAppointmentsThisMonth: appointmentMetrics.total_appointments_this_month,

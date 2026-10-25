@@ -50,11 +50,14 @@ class HttpFlowTests(unittest.TestCase):
         cls.db = asyncio.run(TempDatabase().create(migrate=True))
         try:
             asyncio.run(cls._seed())
+            # The server connects as a non-superuser, non-owner role (like healthcare_user on RDS), so every
+            # flow below runs with row-level security enforced
+            app_database_url = asyncio.run(cls.db.app_role_url())
             port = _free_port()
             cls.base = f"http://127.0.0.1:{port}/api"
             env = {
                 **os.environ,
-                "DATABASE_URL": cls.db.sqlalchemy_url,
+                "DATABASE_URL": app_database_url,
                 "DB_SCHEMA_INIT_ON_STARTUP": "false",
                 "JWT_SECRET": JWT_SECRET,
                 "JWT_ALGORITHM": "HS256",

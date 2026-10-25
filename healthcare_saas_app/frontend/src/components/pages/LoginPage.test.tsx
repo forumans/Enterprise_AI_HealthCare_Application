@@ -4,10 +4,12 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { LoginPage } from "./LoginPage";
 import { useAuthContext } from "../../contexts/AuthContext";
+import { api } from "../../api";
 
 vi.mock("../../contexts/AuthContext", () => ({ useAuthContext: vi.fn() }));
+vi.mock("../../api", () => ({ api: { getAdminSetupStatus: vi.fn() } }));
 
-function renderLogin(role: "SUPPORT_STAFF" | "DOCTOR", form = { email: "", password: "" }) {
+function renderLogin(role: "SUPPORT_STAFF" | "DOCTOR" | "ADMIN", form = { email: "", password: "" }) {
   const handleLogin = vi.fn();
   vi.mocked(useAuthContext).mockReturnValue({
     loginForm: form,
@@ -58,5 +60,20 @@ describe("LoginPage for support staff", () => {
   it("still offers doctors a registration link", () => {
     renderLogin("DOCTOR");
     expect(screen.getByRole("link", { name: "New doctor? Register here" })).toHaveAttribute("href", "/doctors/register");
+  });
+});
+
+describe("LoginPage for admins", () => {
+  it("offers first-time setup only while no administrator exists", async () => {
+    vi.mocked(api.getAdminSetupStatus).mockResolvedValue({ setup_required: true });
+    renderLogin("ADMIN");
+    expect(await screen.findByRole("link", { name: "First time setup? Create the first administrator" })).toHaveAttribute("href", "/admin/setup");
+  });
+
+  it("points to existing administrators once the system is set up", async () => {
+    vi.mocked(api.getAdminSetupStatus).mockResolvedValue({ setup_required: false });
+    renderLogin("ADMIN");
+    expect(await screen.findByText("Administrator accounts are created by an existing administrator")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /setup|register/i })).not.toBeInTheDocument();
   });
 });

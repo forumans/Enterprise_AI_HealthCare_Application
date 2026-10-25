@@ -23,6 +23,7 @@ const routeLabelMap: Array<{ test: (path: string) => boolean; label: string }> =
   { test: (path) => path === "/support/profile", label: "Home > Support Staff > Update Profile" },
   { test: (path) => path === "/forgot-password", label: "Home > Forgot Password" },
   { test: (path) => path === "/reset-password", label: "Home > Reset Password" },
+  { test: (path) => path === "/admin/setup", label: "Home > Admin > First-Time Setup" },
   { test: (path) => path === "/more/password", label: "Home > More > Password" },
   { test: (path) => path === "/more/profile", label: "Home > More > Profile" },
 ];

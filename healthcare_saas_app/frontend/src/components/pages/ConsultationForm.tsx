@@ -95,6 +95,7 @@ export function ConsultationForm({ session, appointmentId }: ConsultationFormPro
       // Try to create medical record first
       try {
         const medicalRecordResponse = await api.createMedicalRecord({
+          appointment_id: appointmentId,
           patient_id: appointment.patient_id,
           diagnosis: consultationState.diagnosis,
           notes: consultationState.symptoms || "No specific symptoms noted",
@@ -108,10 +109,8 @@ export function ConsultationForm({ session, appointmentId }: ConsultationFormPro
           
           // Get the existing medical record for this appointment
           try {
-            const existingRecords = await api.getMedicalRecordByAppointment(appointmentId, session.accessToken);
-            if (existingRecords && existingRecords.length > 0) {
-              medicalRecordId = existingRecords[0].id;
-            }
+            const existingRecord = await api.getMedicalRecordByAppointment(appointmentId, session.accessToken);
+            medicalRecordId = existingRecord?.id ?? null;
           } catch (fetchError) {
             console.error("Failed to fetch existing medical record:", fetchError);
           }

@@ -42,7 +42,7 @@ from backend.app.core.dependencies import SESSION_ENDED, get_current_identity
 from backend.app.core.security import create_access_token, create_password_reset_token, hash_password
 from backend.app.models import Doctor
 from backend.app.services.availability_service import ensure_default_slots
-from backend.tests.integration._pg import CLINIC_TZ, TempDatabase, require_pg, seed_clinic
+from backend.tests.integration._pg import CLINIC_TZ, FAKE_HTTP, TempDatabase, http_from, require_pg, seed_clinic
 
 NY = ZoneInfo(CLINIC_TZ)
 
@@ -225,7 +225,7 @@ class SecurityFixTests(unittest.IsolatedAsyncioTestCase):
         async def can_log_in() -> bool:
             async with self.sessions() as s:
                 try:
-                    await auth_routes.login(request=LoginRequest(email="patient1@example.test", password="Secret12345"), db=s)
+                    await auth_routes.login(request=LoginRequest(email="patient1@example.test", password="Secret12345"), http_request=FAKE_HTTP, db=s)
                     return True
                 except HTTPException:
                     return False
@@ -275,10 +275,10 @@ class SecurityFixTests(unittest.IsolatedAsyncioTestCase):
         sender = AsyncMock(return_value=True)
         with patch.object(auth_routes, "send_email", sender):
             async with self.sessions() as s:
-                unknown = await auth_routes.forgot_password(request=ForgotPasswordRequest(email="nobody@example.test"), db=s)
+                unknown = await auth_routes.forgot_password(request=ForgotPasswordRequest(email="nobody@example.test"), http_request=FAKE_HTTP, db=s)
             self.assertFalse(sender.called)  # nothing sent, but...
             async with self.sessions() as s:
-                known = await auth_routes.forgot_password(request=ForgotPasswordRequest(email="Patient1@Example.test"), db=s)
+                known = await auth_routes.forgot_password(request=ForgotPasswordRequest(email="Patient1@Example.test"), http_request=FAKE_HTTP, db=s)
         self.assertEqual(unknown, known)  # ...the reply doesn't reveal which emails exist
 
         to, subject, body = sender.call_args.args
@@ -287,12 +287,12 @@ class SecurityFixTests(unittest.IsolatedAsyncioTestCase):
 
         async def reset(tok: str, password: str = "NewPass123"):
             async with self.sessions() as s:
-                return await auth_routes.reset_password(request=ResetPasswordRequest(token=tok, new_password=password), db=s)
+                return await auth_routes.reset_password(request=ResetPasswordRequest(token=tok, new_password=password), http_request=FAKE_HTTP, db=s)
 
         async def can_log_in(password: str) -> bool:
             async with self.sessions() as s:
                 try:
-                    await auth_routes.login(request=LoginRequest(email="patient1@example.test", password=password), db=s)
+                    await auth_routes.login(request=LoginRequest(email="patient1@example.test", password=password), http_request=FAKE_HTTP, db=s)
                     return True
                 except HTTPException:
                     return False
@@ -326,17 +326,22 @@ class SecurityFixTests(unittest.IsolatedAsyncioTestCase):
         sender = AsyncMock(return_value=True)
         with patch.object(auth_routes, "send_email", sender):
             async with self.sessions() as s:
-                await auth_routes.forgot_password(request=ForgotPasswordRequest(email="patient1@example.test"), db=s)
+                await auth_routes.forgot_password(request=ForgotPasswordRequest(email="patient1@example.test"), http_request=FAKE_HTTP, db=s)
         self.assertFalse(sender.called)
 
     # --- 8. emails unique across clinics -----------------------------------------------------------
 
     async def test_8_new_accounts_cannot_take_an_email_used_in_any_clinic(self):
-        # "elsewhere@example.test" is a doctor in the other clinic
+        # "elsewhere@example.test" is a doctor in the other clinic; the patient signs up on this clinic's site
+        conn = await self.db.connect()
+        try:
+            await conn.execute("UPDATE tenants SET domain = 'clinic.test' WHERE id = $1", self.ids["tenant"])
+        finally:
+            await conn.close()
         register = RegisterRequest(full_name="Copy Cat", email="Elsewhere@Example.test", password="Secret12345")
         with self.assertRaises(HTTPException) as ctx:
             async with self.sessions() as s:
-                await auth_routes.register(request=register, db=s)
+                await auth_routes.register(request=register, http_request=http_from("clinic.test"), db=s)
         self.assertEqual(ctx.exception.status_code, 409)
 
         body = {"role": "SUPPORT_STAFF", "full_name": "Copy Cat", "email": "elsewhere@example.test", "password": "Secret12345"}

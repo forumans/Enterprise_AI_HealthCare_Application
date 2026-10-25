@@ -32,7 +32,7 @@ async def health_check():
             "version": "1.0.0"
         }
     except SQLAlchemyError as e:
-        logger.error(f"Database health check failed: {str(e)}")
+        logger.error("Database health check failed (%s).", type(e).__name__)
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={
@@ -43,7 +43,7 @@ async def health_check():
             },
         )
     except Exception as e:
-        logger.error(f"Health check failed: {str(e)}")
+        logger.error("Health check failed (%s).", type(e).__name__)
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={
@@ -71,7 +71,7 @@ async def readiness_check():
             if result.scalar():
                 checks["database"] = True
     except Exception as e:
-        logger.error(f"Readiness check failed: {str(e)}")
+        logger.error("Readiness check failed (%s).", type(e).__name__)
     
     all_healthy = all(checks.values())
     

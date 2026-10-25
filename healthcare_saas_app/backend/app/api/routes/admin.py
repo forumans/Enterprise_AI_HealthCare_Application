@@ -14,7 +14,7 @@ from ...core.dependencies import CurrentIdentity, require_roles
 from ...core.database import get_db
 from ...core.timeutils import clinic_day_start, clinic_today, utc_now
 from ...models import Admin, Appointment, Doctor, MedicalRecord, Patient, SupportStaff, User
-from ...services.account_service import ensure_email_available, restore_account
+from ...services.account_service import ensure_can_remove, ensure_email_available, restore_account
 from ...services.audit_service import write_audit_log
 
 router = APIRouter(prefix="/admin")
@@ -40,65 +40,31 @@ async def admin_list_users(
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     offset = (page - 1) * page_size
+    # One query: each user with the name from whichever profile table matches their role
+    profile_name = func.coalesce(Patient.full_name, Doctor.full_name, Admin.full_name, SupportStaff.full_name)
     stmt = (
-        select(User)
+        select(User, profile_name.label("full_name"))
+        .outerjoin(Patient, and_(Patient.user_id == User.id, User.role == "PATIENT"))
+        .outerjoin(Doctor, and_(Doctor.user_id == User.id, User.role == "DOCTOR"))
+        .outerjoin(Admin, and_(Admin.user_id == User.id, User.role == "ADMIN"))
+        .outerjoin(SupportStaff, and_(SupportStaff.user_id == User.id, User.role == "SUPPORT_STAFF"))
         .where(User.tenant_id == identity.tenant_id, User.deleted_at.is_(None))
         .order_by(User.created_at.desc())
         .offset(offset)
         .limit(page_size)
     )
-    rows = (await db.execute(stmt)).scalars().all()
-    
-    result = []
-    for row in rows:
-        full_name = None
-        
-        # Get full_name from the appropriate role-specific table
-        if row.role == "PATIENT":
-            patient = (
-                await db.execute(
-                    select(Patient).where(Patient.user_id == row.id)
-                )
-            ).scalar_one_or_none()
-            if patient:
-                full_name = patient.full_name
-        elif row.role == "DOCTOR":
-            doctor = (
-                await db.execute(
-                    select(Doctor).where(Doctor.user_id == row.id)
-                )
-            ).scalar_one_or_none()
-            if doctor:
-                full_name = doctor.full_name
-        elif row.role == "ADMIN":
-            # Get full_name from admins table
-            admin = (
-                await db.execute(
-                    select(Admin).where(Admin.user_id == row.id)
-                )
-            ).scalar_one_or_none()
-            if admin:
-                full_name = admin.full_name
-            else:
-                full_name = row.email
-        elif row.role == "SUPPORT_STAFF":
-            staff = (
-                await db.execute(
-                    select(SupportStaff).where(SupportStaff.user_id == row.id)
-                )
-            ).scalar_one_or_none()
-            if staff:
-                full_name = staff.full_name
-        
-        result.append({
-            "id": row.id,
-            "name": full_name or row.email,  # Fallback to email if full_name is not found
-            "email": row.email,
-            "role": row.role,
-            "is_deleted": bool(row.deleted_at),
-        })
-    
-    return result
+    rows = (await db.execute(stmt)).all()
+    return [
+        {
+            "id": user.id,
+            "name": full_name or user.email,  # Fallback to email if there's no profile name
+            "email": user.email,
+            "role": user.role,
+            "is_deleted": bool(user.deleted_at),
+            "is_active": bool(user.is_active),
+        }
+        for user, full_name in rows
+    ]
 
 
 @router.get("/appointments")
@@ -108,24 +74,31 @@ async def admin_list_appointments(
     identity: CurrentIdentity = Depends(require_roles("ADMIN")),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
+    """Paged appointments, newest first, with names. Cancelled visits are included and labelled by status
+    ("CANCELLED") and `is_cancelled`, so the list is a complete history."""
     offset = (page - 1) * page_size
     stmt = (
-        select(Appointment)
+        select(Appointment, Doctor.full_name, Patient.full_name)
+        .join(Doctor, and_(Doctor.id == Appointment.doctor_id, Doctor.tenant_id == identity.tenant_id))
+        .join(Patient, and_(Patient.id == Appointment.patient_id, Patient.tenant_id == identity.tenant_id))
         .where(Appointment.tenant_id == identity.tenant_id)
         .order_by(Appointment.appointment_time.desc())
         .offset(offset)
         .limit(page_size)
     )
-    rows = (await db.execute(stmt)).scalars().all()
+    rows = (await db.execute(stmt)).all()
     return [
         {
             "id": row.id,
             "date": row.appointment_time.isoformat(),
             "doctor": row.doctor_id,
+            "doctor_name": doctor_name,
             "patient": row.patient_id,
+            "patient_name": patient_name,
             "status": row.status,
+            "is_cancelled": row.status == "CANCELLED" or row.deleted_at is not None,
         }
-        for row in rows
+        for row, doctor_name, patient_name in rows
     ]
 
 
@@ -167,7 +140,25 @@ async def admin_reports(
     ).scalar_one()
 
     utilization = 0 if doctor_count == 0 else round(float(completed_appointments) / float(doctor_count), 2)
+
+    async def active_people(profile) -> int:
+        """Profiles whose login is usable: neither the profile nor the user is deleted, and the user is active."""
+        return int((
+            await db.execute(
+                select(func.count(profile.id))
+                .join(User, User.id == profile.user_id)
+                .where(
+                    profile.tenant_id == identity.tenant_id,
+                    profile.deleted_at.is_(None),
+                    User.deleted_at.is_(None),
+                    User.is_active.is_(True),
+                )
+            )
+        ).scalar_one() or 0)
+
     return {
+        "doctor_count": await active_people(Doctor),
+        "patient_count": await active_people(Patient),
         "monthly_patient_count": int(monthly_patient_count or 0),
         "diagnosis_frequency": int(diagnosis_frequency or 0),
         "doctor_utilization_rate": utilization,
@@ -218,7 +209,7 @@ class AdminCreateUserRequest(BaseModel):
     role: str = Field(pattern="^(PATIENT|DOCTOR|ADMIN|SUPPORT_STAFF)$")
     full_name: str = Field(min_length=3, max_length=255)
     email: str = Field(min_length=5, max_length=255)
-    password: str = Field(min_length=5, max_length=255)
+    password: str = Field(min_length=8, max_length=255)
     phone: str = Field(default="", max_length=50)
     specialty: str = Field(default="", max_length=255)
     license_number: str = Field(default="", max_length=100)
@@ -347,7 +338,8 @@ async def soft_delete_user(
     ).scalar_one_or_none()
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
-    
+    await ensure_can_remove(db, identity, user)
+
     # Based on the user's role, delete from the appropriate table
     if user.role == "PATIENT":
         # Find and soft delete the patient record

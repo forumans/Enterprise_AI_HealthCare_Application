@@ -1,11 +1,14 @@
 """FastAPI entrypoint with middleware wiring.
 
 This file demonstrates how tenant/auth context, audit context, and security
-headers are applied globally. The middleware ordering is intentional:
+headers are applied globally. The middleware ordering is intentional (outermost first):
 
-1) Security headers (always applied)
-2) TenantContextMiddleware (auth + tenant context)
-3) AuditContextMiddleware (captures actor/tenant for write operations)
+1) CORS, then the unhandled-error catcher (so even a 500 carries CORS headers)
+2) Security headers (outside the auth middleware, so its 401 responses get them too)
+3) TenantContextMiddleware (auth + tenant context)
+4) AuditContextMiddleware (inside auth, so it sees the tenant and user it set)
+
+Starlette makes the last middleware added the outermost, so they're added in reverse order.
 """
 
 from __future__ import annotations
@@ -28,6 +31,21 @@ from .middleware import AuditContextMiddleware, SecurityHeadersMiddleware, Tenan
 from .models.base import Base
 
 
+class _RedactAccessLog(logging.Filter):
+    """Drop the client address and query string from Uvicorn access logs (local runs).
+
+    Search URLs carry names, emails and phone numbers in `?q=`, and client IPs are personal data too.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple) and len(record.args) >= 3:
+            args = list(record.args)
+            args[0] = "-"
+            args[2] = str(args[2]).split("?", 1)[0]
+            record.args = tuple(args)
+        return True
+
+
 def _configure_logging() -> logging.Logger:
     """Configure console logging for the application."""
     logging.basicConfig(
@@ -35,6 +53,9 @@ def _configure_logging() -> logging.Logger:
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
         handlers=[logging.StreamHandler()],
     )
+    access_logger = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, _RedactAccessLog) for f in access_logger.filters):
+        access_logger.addFilter(_RedactAccessLog())
     return logging.getLogger("healthcare.app")
 
 
@@ -60,14 +81,23 @@ def create_app() -> FastAPI:
 
     app_logger = _configure_logging()
 
-    app = FastAPI(title="Healthcare SaaS API", version="1.0.0")
+    # No interactive API docs in production: they map every endpoint for an attacker
+    is_production = (settings.app_env or "").lower() in {"production", "prod"}
+    app = FastAPI(
+        title="Healthcare SaaS API",
+        version="1.0.0",
+        docs_url=None if is_production else "/docs",
+        redoc_url=None if is_production else "/redoc",
+        openapi_url=None if is_production else "/openapi.json",
+    )
 
     # Exception handler to prevent exposing sensitive data in validation errors
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError):
         """Handle validation errors without exposing sensitive data."""
-        # Log the full error for debugging
-        app_logger.error(f"Validation error: {exc.errors()}")
+        # Log which fields failed and why - never the submitted values (names, emails, passwords)
+        problems = [f"{'.'.join(str(part) for part in err.get('loc', ()))}: {err.get('type')}" for err in exc.errors()]
+        app_logger.warning("Validation error on %s %s: %s", request.method, request.url.path, "; ".join(problems))
         
         # Return a generic error message without the input data
         return JSONResponse(
@@ -84,7 +114,7 @@ def create_app() -> FastAPI:
         if origin.strip()
     ]
 
-    app.add_middleware(SecurityHeadersMiddleware)
+    app.add_middleware(AuditContextMiddleware)
     app.add_middleware(
         TenantContextMiddleware,
         secret_key=jwt_secret,
@@ -108,10 +138,12 @@ def create_app() -> FastAPI:
             "/api/doctors/register",
             "/admin/register",
             "/api/admin/register",
+            "/admin/setup-status",
+            "/api/admin/setup-status",
         },
         excluded_prefixes=(),
     )
-    app.add_middleware(AuditContextMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware)
     # Inside CORS (added just before it), so server errors still get CORS headers
     app.add_middleware(BaseHTTPMiddleware, dispatch=catch_unhandled_errors)
 

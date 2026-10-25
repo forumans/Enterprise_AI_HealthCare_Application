@@ -17,11 +17,25 @@ import os
 import unittest
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 import asyncpg
 
 ADMIN_URL = os.environ.get("HC_TEST_PG_ADMIN_URL", "")
+
+# Stand-in for the Starlette request that the public auth handlers read the client address from
+FAKE_HTTP = SimpleNamespace(headers={}, client=SimpleNamespace(host="127.0.0.1"))
+
+# Non-superuser login the app connects as in RLS tests, like healthcare_user on RDS
+APP_ROLE = "hc_app_rls"
+APP_ROLE_PASSWORD = "hc_app_rls_test_only"
+
+
+def http_from(host: str) -> SimpleNamespace:
+    """A fake request whose browser was on https://<host> (how registration picks the clinic)."""
+
+    return SimpleNamespace(headers={"origin": f"https://{host}"}, client=SimpleNamespace(host="127.0.0.1"))
 HERE = Path(__file__).resolve().parent
 MIGRATIONS_DIR = HERE.parent.parent / "migrations"
 BASELINE_SCHEMA = HERE / "baseline_schema_pre_003.sql"
@@ -58,11 +72,31 @@ class TempDatabase:
         if migrate:
             await self.run_migration("003_convert_timestamps_to_timestamptz.sql")
             await self.run_migration("005_add_support_staff_role.sql")
+            await self.run_migration("007_row_level_security.sql")
         return self
 
     @property
     def sqlalchemy_url(self) -> str:
         return self.url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+    async def app_role_url(self) -> str:
+        """SQLAlchemy URL for a non-superuser, non-owner role with only DML rights: RLS applies to it."""
+
+        conn = await self.connect()
+        try:
+            exists = await conn.fetchval("SELECT 1 FROM pg_roles WHERE rolname = $1", APP_ROLE)
+            if not exists:
+                await conn.execute(f"CREATE ROLE {APP_ROLE} LOGIN PASSWORD '{APP_ROLE_PASSWORD}' NOSUPERUSER NOBYPASSRLS")
+            await conn.execute(f'GRANT CONNECT ON DATABASE "{self.name}" TO {APP_ROLE}')
+            await conn.execute(f"GRANT USAGE ON SCHEMA public TO {APP_ROLE}")
+            await conn.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {APP_ROLE}")
+            await conn.execute(f"GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {APP_ROLE}")
+            await conn.execute(f"GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO {APP_ROLE}")
+        finally:
+            await conn.close()
+        parts = urlsplit(self.sqlalchemy_url)
+        host = parts.hostname + (f":{parts.port}" if parts.port else "")
+        return parts._replace(netloc=f"{APP_ROLE}:{APP_ROLE_PASSWORD}@{host}").geturl()
 
     async def connect(self) -> asyncpg.Connection:
         return await asyncpg.connect(self.url)

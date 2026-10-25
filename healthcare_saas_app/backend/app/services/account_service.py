@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from fastapi import HTTPException, status
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..core import cross_tenant
 from ..core.dependencies import CurrentIdentity
 from ..models import Admin, Doctor, Patient, SupportStaff, User
 from .audit_service import write_audit_log
@@ -25,14 +26,31 @@ async def ensure_email_available(db: AsyncSession, email: str, tenant_id: str, *
     (tenant_id, email) is unique.
     """
 
-    stmt = select(User.id).where(
-        User.email == email,
-        or_(User.deleted_at.is_(None), User.tenant_id == tenant_id),
-    )
-    if exclude_user_id is not None:
-        stmt = stmt.where(User.id != exclude_user_id)
-    if (await db.execute(stmt.limit(1))).scalar_one_or_none() is not None:
+    # Looks across every tenant, which row-level security only allows through cross_tenant
+    if await cross_tenant.email_in_use(db, email, tenant_id, exclude_user_id):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=EMAIL_TAKEN)
+
+
+async def ensure_can_remove(db: AsyncSession, identity: CurrentIdentity, user: User) -> None:
+    """Refuse to delete your own account or the clinic's last active admin.
+
+    Active admin rows are locked so two admins deleting each other at once can't leave none.
+    """
+
+    if user.id == identity.user_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You can't delete your own account.")
+    if user.role != "ADMIN":
+        return
+    active_admins = (
+        await db.execute(
+            select(User.id)
+            .where(User.tenant_id == identity.tenant_id, User.role == "ADMIN", User.is_active.is_(True), User.deleted_at.is_(None))
+            .order_by(User.id)
+            .with_for_update()
+        )
+    ).scalars().all()
+    if not [admin_id for admin_id in active_admins if admin_id != user.id]:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="At least one admin must stay active.")
 
 
 async def restore_account(db: AsyncSession, identity: CurrentIdentity, user_id: str) -> User:

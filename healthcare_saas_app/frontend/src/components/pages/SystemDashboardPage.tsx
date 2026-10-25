@@ -37,13 +37,14 @@ export function SystemDashboardPage({ auth, userData }: SystemDashboardPageProps
       setLoading(true);
       try {
         const dashboardData = await userData.loadAdminDashboard();
-        const users: AdminUserRow[] = dashboardData?.adminUsers ?? userData.adminUsers ?? [];
+        // Totals come from server-side counts, not from the (paged) recent-users list
+        const counts = dashboardData?.reports ?? userData.reports;
         const appointmentMetrics: AppointmentMetrics =
           dashboardData?.appointmentMetrics ??
           userData.appointmentMetrics ??
           defaultAppointmentMetrics;
 
-        setSystemStats(buildSystemStats(users, appointmentMetrics));
+        setSystemStats(buildSystemStats(counts, appointmentMetrics));
       } catch (error) {
         console.error("Failed to load dashboard data:", error);
       } finally {

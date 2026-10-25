@@ -15,12 +15,10 @@ from .patients import router as patients_router
 from .prescriptions import router as prescriptions_router
 from .support import router as support_router
 from .tenants import router as tenants_router
-from .users import router as users_router
 
 api_router = APIRouter()
 api_router.include_router(auth_router, tags=["auth"])
 api_router.include_router(tenants_router, tags=["tenants"])
-api_router.include_router(users_router, tags=["users"])
 api_router.include_router(patient_router, tags=["patient"])
 api_router.include_router(patients_router, tags=["patients"])
 api_router.include_router(documents_router, tags=["documents"])

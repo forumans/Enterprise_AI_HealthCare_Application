@@ -40,6 +40,7 @@ async def send_email(to: str, subject: str, body: str) -> bool:
     try:
         await asyncio.to_thread(_send, to, subject, body)
         return True
-    except Exception:  # never log the recipient or body - they're personal data / secrets
-        logger.exception("Email sending failed.")
+    except Exception as exc:  # never log the recipient or body - they're personal data / secrets
+        # Only the exception type: SMTP errors can embed the recipient address in their message
+        logger.error("Email sending failed (%s).", type(exc).__name__)
         return False

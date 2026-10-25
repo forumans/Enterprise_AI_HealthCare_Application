@@ -12,12 +12,13 @@ from __future__ import annotations
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ...core import cross_tenant, rate_limit
 from ...core.config import settings
 from ...core.security import (
     create_access_token,
@@ -28,11 +29,12 @@ from ...core.security import (
     verify_password,
 )
 from ...core.dependencies import CurrentIdentity, get_current_identity, require_roles
-from ...core.database import get_db
-from ...models import Patient, Tenant, User
+from ...core.database import get_db, set_db_tenant
+from ...models import Patient, User
 from ...services.account_service import ensure_email_available
 from ...services.audit_service import write_audit_log
 from ...services.email_service import send_email
+from ...services.tenant_service import resolve_registration_tenant
 
 router = APIRouter(prefix="/auth")
 
@@ -41,7 +43,7 @@ class RegisterRequest(BaseModel):
     full_name: str = Field(min_length=3, max_length=255)
     email: str
     phone: str | None = None
-    password: str = Field(min_length=5)
+    password: str = Field(min_length=8, max_length=255)
     insurance_provider: str | None = None
     insurance_policy_number: str | None = None
     date_of_birth: date | None = None
@@ -66,28 +68,13 @@ class ForgotPasswordRequest(BaseModel):
 
 class ResetPasswordRequest(BaseModel):
     token: str
-    new_password: str = Field(min_length=8)
-
-
-async def _ensure_default_tenant(db: AsyncSession) -> Tenant:
-    """Get/create a default tenant for bootstrap flows.
-
-    In production, tenant onboarding should be a dedicated admin flow.
-    """
-
-    existing = (await db.execute(select(Tenant).limit(1))).scalar_one_or_none()
-    if existing:
-        return existing
-
-    tenant = Tenant(name="Default Tenant", domain="default.local")
-    db.add(tenant)
-    await db.flush()
-    return tenant
+    new_password: str = Field(min_length=8, max_length=255)
 
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
-async def register(request: RegisterRequest, db: AsyncSession = Depends(get_db)) -> dict:
-    tenant = await _ensure_default_tenant(db)
+async def register(request: RegisterRequest, http_request: Request, db: AsyncSession = Depends(get_db)) -> dict:
+    rate_limit.hit("register-ip", rate_limit.client_ip(http_request))
+    tenant = await resolve_registration_tenant(db, http_request)
     await ensure_email_available(db, str(request.email).lower(), tenant.id)
 
     user = User(
@@ -139,15 +126,22 @@ async def register(request: RegisterRequest, db: AsyncSession = Depends(get_db))
 
 
 @router.post("/login")
-async def login(request: LoginRequest, db: AsyncSession = Depends(get_db)) -> dict:
-    stmt = select(User).where(User.email == str(request.email).lower(), User.deleted_at.is_(None), User.is_active.is_(True))
-    user = (await db.execute(stmt)).scalar_one_or_none()
-    
-    if not user:
+async def login(request: LoginRequest, http_request: Request, db: AsyncSession = Depends(get_db)) -> dict:
+    email = str(request.email).strip().lower()
+    ip = rate_limit.client_ip(http_request)
+    # Only failed attempts count, so a user who signs in correctly is never throttled
+    rate_limit.check("login-email", email)
+    rate_limit.check("login-ip", ip)
+
+    # Login isn't tenant-qualified, so the account is found through the narrow cross-tenant lookup
+    user = await cross_tenant.login_lookup(db, email)
+
+    if not user or not verify_password(request.password, user.password_hash):
+        rate_limit.record("login-email", email)
+        rate_limit.record("login-ip", ip)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication failed")
-    
-    if not verify_password(request.password, user.password_hash):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication failed")
+    rate_limit.clear("login-email", email)
+    await set_db_tenant(db, user.tenant_id, user.id)
 
     token = create_access_token(user_id=user.id, tenant_id=user.tenant_id, role=user.role)
 
@@ -190,7 +184,7 @@ The link works once. If you didn't ask for this, you can ignore this email; your
 
 
 @router.post("/forgot-password")
-async def forgot_password(request: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)) -> dict:
+async def forgot_password(request: ForgotPasswordRequest, http_request: Request, db: AsyncSession = Depends(get_db)) -> dict:
     """Email a single-use, time-limited reset link to an active account.
 
     The reply is identical whether or not the email belongs to an account (and whether email could
@@ -198,14 +192,15 @@ async def forgot_password(request: ForgotPasswordRequest, db: AsyncSession = Dep
     """
 
     email = str(request.email).strip().lower()
-    user = (
-        await db.execute(select(User).where(User.email == email, User.deleted_at.is_(None), User.is_active.is_(True)))
-    ).scalar_one_or_none()
+    rate_limit.hit("reset-ip", rate_limit.client_ip(http_request))
+    rate_limit.hit("reset-email", email)
+    user = await cross_tenant.login_lookup(db, email)
     if user is not None:
+        await set_db_tenant(db, user.tenant_id, user.id)
         token = create_password_reset_token(user_id=user.id, password_hash=user.password_hash)
         link = f"{settings.frontend_url}/reset-password?token={token}"
         await send_email(
-            user.email,
+            email,
             "Reset your password",
             PASSWORD_RESET_EMAIL.format(minutes=settings.password_reset_minutes, link=link),
         )
@@ -224,18 +219,19 @@ async def forgot_password(request: ForgotPasswordRequest, db: AsyncSession = Dep
 
 
 @router.post("/reset-password")
-async def reset_password(request: ResetPasswordRequest, db: AsyncSession = Depends(get_db)) -> dict:
+async def reset_password(request: ResetPasswordRequest, http_request: Request, db: AsyncSession = Depends(get_db)) -> dict:
     """Set a new password using the token from a reset email."""
+    rate_limit.hit("reset-ip", rate_limit.client_ip(http_request))
 
     claims = read_password_reset_token(request.token)
     if claims is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=INVALID_RESET_LINK)
     user_id, fingerprint = claims
-    user = (
-        await db.execute(select(User).where(User.id == user_id, User.deleted_at.is_(None), User.is_active.is_(True)))
-    ).scalar_one_or_none()
-    if user is None or not password_reset_token_matches(fingerprint, user.password_hash):
+    account = await cross_tenant.reset_lookup(db, user_id)
+    if account is None or not password_reset_token_matches(fingerprint, account.password_hash):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=INVALID_RESET_LINK)
+    await set_db_tenant(db, account.tenant_id, account.id)
+    user = (await db.execute(select(User).where(User.id == account.id))).scalar_one()
 
     user.password_hash = hash_password(request.new_password)
     await write_audit_log(  # never log the password itself

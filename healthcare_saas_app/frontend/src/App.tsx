@@ -59,6 +59,7 @@ import {
 } from "./components/pages/AdminDeactivatePage";
 import { ForgotPasswordPage } from "./components/pages/ForgotPasswordPage";
 import { ResetPasswordPage } from "./components/pages/ResetPasswordPage";
+import { AdminSetupPage } from "./components/pages/AdminSetupPage";
 import { 
   AdminRegistrationPage 
 } from "./components/pages/AdminRegistrationPage";
@@ -166,6 +167,9 @@ function AppContent() {
           {/* Self-service password reset (public) */}
           <Route path="/forgot-password" element={<AppLayout session={auth.session} status={auth.status}><ForgotPasswordPage /></AppLayout>} />
           <Route path="/reset-password" element={<AppLayout session={auth.session} status={auth.status}><ResetPasswordPage /></AppLayout>} />
+
+          {/* First-time setup of a new deployment (public; works only until an admin exists) */}
+          <Route path="/admin/setup" element={<AppLayout session={auth.session} status={auth.status}><AdminSetupPage /></AppLayout>} />
           
           {/* Public routes - no authentication required */}
           <Route path="/patients/register" element={<AppLayout session={auth.session} status={auth.status}><PatientRegistrationPage /></AppLayout>} />

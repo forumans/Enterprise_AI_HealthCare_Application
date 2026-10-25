@@ -124,10 +124,6 @@ export function useUserData(session: SessionState) {
 
     
     try {
-      // First, debug what identity we have
-      const debugInfo = await api.debugTenantInfo(session.accessToken);
-      
-      // Then get the actual tenant info
       const tenantInfo = await api.getCurrentTenant(session.accessToken);
       setState(prev => ({
         ...prev,

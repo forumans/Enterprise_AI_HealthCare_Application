@@ -7,7 +7,7 @@
 
 import React, { useState, useEffect } from "react";
 import { api } from "../../api";
-import { OFFICE_HOUR_SLOTS, isAppointmentUpcoming, parseServerDate, removeCancelledBooking } from "../../utils";
+import { OFFICE_HOUR_SLOTS, isAppointmentUpcoming, parseErrorMessage, parseServerDate, removeCancelledBooking } from "../../utils";
 import type { SessionState, AppointmentRow } from "../../types/app";
 import { RescheduleAppointmentModal, type RescheduleTarget } from "../common/RescheduleAppointmentModal";
 
@@ -178,7 +178,7 @@ export function PatientAppointmentsPage({ auth, appointments, userData }: Patien
       alert("Appointment cancelled successfully");
     } catch (error) {
       console.error("Failed to cancel appointment:", error);
-      alert("Failed to cancel appointment. Please try again.");
+      alert(parseErrorMessage(error) || "Failed to cancel appointment. Please try again.");
     } finally {
       setCancellingId(null);
     }
@@ -264,7 +264,12 @@ export function PatientAppointmentsPage({ auth, appointments, userData }: Patien
       alert("Appointment booked successfully!");
     } catch (error) {
       console.error("Failed to book appointment:", error);
-      alert("Failed to book appointment. Please try again.");
+      // Show the server's reason (e.g. "Requested slot is not available." when someone just took it)
+      alert(parseErrorMessage(error) || "Failed to book appointment. Please try again.");
+      // The slot may have been taken meanwhile: refresh the grid so it shows the current state
+      api.listAllDoctorAvailability(selectedDoctorId, auth.session.accessToken)
+        .then(setDoctorAvailability)
+        .catch((err) => console.error("Failed to refresh availability:", err));
     }
   };
 

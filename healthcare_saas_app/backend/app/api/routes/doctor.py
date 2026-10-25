@@ -2,60 +2,89 @@
 
 from __future__ import annotations
 
-import sys
+import logging
 from datetime import date, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ...core import cross_tenant, rate_limit
 from ...core.dependencies import CurrentIdentity, get_current_identity, require_roles
 from ...core.database import get_db
-from ...models import Appointment, Doctor, DoctorAvailability, MedicalRecord, Patient, Prescription, User, Tenant
+from ...models import Admin, Appointment, Doctor, DoctorAvailability, MedicalRecord, Patient, Prescription, User
 from ...core.security import hash_password
 from ...core.timeutils import clinic_day_bounds, clinic_today, clinic_week_bounds, parse_client_datetime, utc_now
 from ...services.availability_service import ensure_default_slots
 from ...services.account_service import ensure_email_available
 from ...services.audit_service import write_audit_log
+from ...services.tenant_service import resolve_registration_tenant
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+PROFILE_FAILED = "Your profile couldn't be loaded or saved. Please try again."
 
 
-async def _ensure_default_tenant(db: AsyncSession) -> Tenant:
-    """Get/create a default tenant for bootstrap flows.
+def _check_slot_window(slot_time: datetime) -> None:
+    """Slots can be changed only from now up to 30 days ahead (same rule for every availability endpoint)."""
 
-    In production, tenant onboarding should be a dedicated admin flow.
-    """
+    now = utc_now()
+    if slot_time < now:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot update slots earlier than now.")
+    if slot_time > now + timedelta(days=30):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot update slots beyond 30 days.")
 
-    existing = (await db.execute(select(Tenant).limit(1))).scalar_one_or_none()
-    if existing:
-        return existing
 
-    tenant = Tenant(name="Default Tenant", domain="default.local")
-    db.add(tenant)
-    await db.flush()
-    return tenant
+async def _audit_slot(db: AsyncSession, identity: CurrentIdentity, slot: DoctorAvailability, action: str, old_status: str | None) -> None:
+    await write_audit_log(
+        db,
+        tenant_id=identity.tenant_id,
+        table_name="doctor_availability",
+        record_id=slot.id,
+        action_type=action,
+        old_data={"status": old_status} if old_status else None,
+        new_data=None if action == "DELETE" else {"status": slot.status, "slot_time": slot.slot_time.isoformat()},
+        performed_by=identity.user_id,
+    )
+
+
+ADMIN_ALREADY_SET_UP = "An administrator already exists. Ask an administrator to create your account."
 
 
 class AdminRegisterRequest(BaseModel):
     full_name: str = Field(min_length=3, max_length=255)
     email: str = Field(min_length=5, max_length=255)
-    password: str = Field(min_length=5, max_length=255)
+    password: str = Field(min_length=8, max_length=255)
+
+
+@router.get("/admin/setup-status")
+async def admin_setup_status(db: AsyncSession = Depends(get_db)) -> dict:
+    """Public: whether this deployment still needs its first admin (drives the first-time setup link)."""
+
+    return {"setup_required": not await cross_tenant.any_active_admin(db)}
 
 
 @router.post("/admin/register", status_code=status.HTTP_201_CREATED)
 async def register_admin(
     payload: AdminRegisterRequest,
+    http_request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Public endpoint for first admin self-registration."""
-    # Hash password
+    """Public bootstrap endpoint: creates the very first admin of a new deployment.
+
+    Refused as soon as any clinic has an active admin. Admins of further clinics are created by the
+    platform operator, and further admins of a clinic by its admins (POST /admin/users), so this public
+    endpoint can't be used to take over a running clinic or claim a newly created one.
+    """
+    rate_limit.hit("register-ip", rate_limit.client_ip(http_request))
+    if await cross_tenant.any_active_admin(db):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ADMIN_ALREADY_SET_UP)
     password_hash = hash_password(payload.password)
-    
-    # Get or create default tenant
-    tenant = await _ensure_default_tenant(db)
+
+    tenant = await resolve_registration_tenant(db, http_request)
     await ensure_email_available(db, payload.email.lower().strip(), tenant.id)
 
     # Create user first
@@ -71,7 +100,18 @@ async def register_admin(
         await db.flush()
     except IntegrityError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered.") from exc
-    
+
+    db.add(Admin(tenant_id=tenant.id, user_id=user.id, full_name=payload.full_name.strip()))
+    await write_audit_log(
+        db,
+        tenant_id=tenant.id,
+        table_name="users",
+        record_id=user.id,
+        action_type="INSERT",
+        old_data=None,
+        new_data={"role": "ADMIN", "via": "bootstrap"},
+        performed_by=user.id,
+    )
     await db.commit()
     return {"message": f"Admin registration successful for {payload.full_name}"}
 
@@ -79,7 +119,7 @@ async def register_admin(
 class DoctorRegisterRequest(BaseModel):
     full_name: str = Field(min_length=3, max_length=255)
     email: str = Field(min_length=5, max_length=255)
-    password: str = Field(min_length=5, max_length=255)
+    password: str = Field(min_length=8, max_length=255)
     specialty: str | None = None
     license_number: str | None = None
     phone: str | None = None
@@ -89,23 +129,26 @@ class DoctorRegisterRequest(BaseModel):
 @router.post("/doctors/register", status_code=status.HTTP_201_CREATED)
 async def register_doctor(
     payload: DoctorRegisterRequest,
+    http_request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Public endpoint for doctor self-registration."""
-    # Hash password
+    """Public endpoint for doctor self-registration.
+
+    The account starts deactivated: an admin must activate it (Admin > Deactivate) before the doctor
+    can sign in, so nobody can pose as a clinic doctor just by registering.
+    """
+    rate_limit.hit("register-ip", rate_limit.client_ip(http_request))
     password_hash = hash_password(payload.password)
-    
-    # Get or create default tenant
-    tenant = await _ensure_default_tenant(db)
+
+    tenant = await resolve_registration_tenant(db, http_request)
     await ensure_email_available(db, payload.email.lower().strip(), tenant.id)
 
-    # Create user first
     user = User(
         tenant_id=tenant.id,
         email=payload.email.lower().strip(),
         password_hash=password_hash,
         role="DOCTOR",
-        is_active=True,
+        is_active=False,
     )
     db.add(user)
     try:
@@ -128,9 +171,21 @@ async def register_doctor(
         await db.flush()
     except IntegrityError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Doctor profile already exists.") from exc
-    
+
+    await write_audit_log(
+        db,
+        tenant_id=tenant.id,
+        table_name="users",
+        record_id=user.id,
+        action_type="INSERT",
+        old_data=None,
+        new_data={"role": "DOCTOR", "is_active": False, "via": "self_registration"},
+        performed_by=user.id,
+    )
     await db.commit()
-    return {"message": f"Doctor registration successful for {payload.full_name}"}
+    return {
+        "message": "Registration received. An administrator must activate your account before you can sign in."
+    }
 
 
 class CreateDoctorRequest(BaseModel):
@@ -426,6 +481,7 @@ async def upsert_availability(
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid datetime format.") from exc
 
     await _doctor_for_slot_change(db, identity, doctor_id)
+    _check_slot_window(slot_time)
 
     # Check if slot already exists
     existing = await db.execute(
@@ -442,7 +498,9 @@ async def upsert_availability(
         if existing.status == "BOOKED":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot modify a patient-booked slot.")
         # Update existing
+        old_status = existing.status
         existing.status = "AVAILABLE" if payload.is_available else "BLOCKED"
+        await _audit_slot(db, identity, existing, "UPDATE", old_status)
         await db.commit()
         return {"message": "Availability updated successfully"}
     else:
@@ -454,6 +512,8 @@ async def upsert_availability(
             status="AVAILABLE" if payload.is_available else "BLOCKED",
         )
         db.add(availability)
+        await db.flush()
+        await _audit_slot(db, identity, availability, "INSERT", None)
         await db.commit()
         return {"message": "Availability added successfully"}
 
@@ -476,6 +536,7 @@ async def delete_availability(
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid datetime format.") from exc
 
     await _doctor_for_slot_change(db, identity, doctor_id)
+    _check_slot_window(slot_time)
 
     # Find and delete the availability
     availability = await db.execute(
@@ -493,6 +554,7 @@ async def delete_availability(
     if availability.status == "BOOKED":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot modify a patient-booked slot.")
 
+    await _audit_slot(db, identity, availability, "DELETE", availability.status)
     await db.delete(availability)
     await db.commit()
     return {"message": "Availability deleted successfully"}
@@ -769,12 +831,7 @@ async def upsert_doctor_availability(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid slot timestamp.") from exc
 
-    now = utc_now()
-
-    if slot_time < now:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot update slots earlier than now.")
-    if slot_time > now + timedelta(days=30):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot update slots beyond 30 days.")
+    _check_slot_window(slot_time)
 
     existing = (
         await db.execute(
@@ -787,15 +844,16 @@ async def upsert_doctor_availability(
 
     if payload.is_available:
         if existing is None:
-            db.add(
-                DoctorAvailability(
-                    tenant_id=doctor.tenant_id,
-                    doctor_id=doctor.id,
-                    slot_time=slot_time,
-                    status="AVAILABLE",
-                    block_reason=None,
-                )
+            slot = DoctorAvailability(
+                tenant_id=doctor.tenant_id,
+                doctor_id=doctor.id,
+                slot_time=slot_time,
+                status="AVAILABLE",
+                block_reason=None,
             )
+            db.add(slot)
+            await db.flush()
+            await _audit_slot(db, identity, slot, "INSERT", None)
             await db.commit()
             return {"message": "Availability added successfully"}
         elif existing.status == "BOOKED":
@@ -805,28 +863,32 @@ async def upsert_doctor_availability(
             # Unblock the slot
             existing.status = "AVAILABLE"
             existing.block_reason = None
+            await _audit_slot(db, identity, existing, "UPDATE", "BLOCKED")
             await db.commit()
             return {"message": "Slot unblocked successfully"}
     else:
         if existing is None:
             # Create a blocked slot
-            db.add(
-                DoctorAvailability(
-                    tenant_id=doctor.tenant_id,
-                    doctor_id=doctor.id,
-                    slot_time=slot_time,
-                    status="BLOCKED",
-                    block_reason=payload.block_reason,
-                )
+            slot = DoctorAvailability(
+                tenant_id=doctor.tenant_id,
+                doctor_id=doctor.id,
+                slot_time=slot_time,
+                status="BLOCKED",
+                block_reason=payload.block_reason,
             )
+            db.add(slot)
+            await db.flush()
+            await _audit_slot(db, identity, slot, "INSERT", None)
             await db.commit()
             return {"message": "Slot blocked successfully"}
         else:
             # Mark existing slot as blocked (only if not booked)
             if existing.status == "BOOKED":
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot modify a patient-booked slot.")
+            old_status = existing.status
             existing.status = "BLOCKED"
             existing.block_reason = payload.block_reason
+            await _audit_slot(db, identity, existing, "UPDATE", old_status)
             await db.commit()
             return {"message": "Slot blocked successfully"}
     return {"message": "Availability updated."}
@@ -877,8 +939,11 @@ async def get_doctor_profile(
             "deleted_at": doctor.deleted_at.isoformat() if doctor.deleted_at else None
         }
         
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch profile: {str(e)}")
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Failed to load doctor profile.")
+        raise HTTPException(status_code=500, detail=PROFILE_FAILED)
 
 
 @router.put("/doctor/profile")
@@ -906,6 +971,8 @@ async def update_doctor_profile(
         if not doctor:
             raise HTTPException(status_code=404, detail="Doctor not found")
         
+        old_data = {"full_name": doctor.full_name, "phone": doctor.phone, "specialty": doctor.specialty, "license_number": doctor.license_number}
+
         # Update allowed fields (original Doctor model until database is updated)
         if "fullName" in payload and payload["fullName"]:
             doctor.full_name = payload["fullName"]
@@ -918,14 +985,27 @@ async def update_doctor_profile(
         # Note: Extended fields (DOB, gender, address) not in database yet
         # Note: Email is in users table, not doctors table
         # Note: Insurance fields are not in Doctor model
-        
-        # Save changes
+
+        new_data = {"full_name": doctor.full_name, "phone": doctor.phone, "specialty": doctor.specialty, "license_number": doctor.license_number}
+        changed = [field for field in old_data if old_data[field] != new_data[field]]
+        if changed:
+            await write_audit_log(
+                db,
+                tenant_id=identity.tenant_id,
+                table_name="doctors",
+                record_id=doctor.id,
+                action_type="UPDATE",
+                old_data={field: old_data[field] for field in changed},
+                new_data={field: new_data[field] for field in changed},
+                performed_by=identity.user_id,
+            )
         await db.commit()
-        
+
         return {"message": "Profile updated successfully"}
-        
+
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         await db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to update profile: {str(e)}")
+        logger.exception("Failed to update doctor profile.")
+        raise HTTPException(status_code=500, detail=PROFILE_FAILED)

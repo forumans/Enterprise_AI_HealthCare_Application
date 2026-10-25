@@ -85,8 +85,8 @@ export function DoctorRegistrationPage({ auth }: DoctorRegistrationPageProps) {
     if (!/^\+?[0-9\-\s]{10,15}$/.test(phone)) {
       nextErrors.phone = "Phone should be 10-15 digits.";
     }
-    if (password.length < 5) {
-      nextErrors.password = "Password must be at least 5 characters.";
+    if (password.length < 8) {
+      nextErrors.password = "Password must be at least 8 characters long.";
     }
     
     // Validate doctor age (must be at least 18 years old)
@@ -117,10 +117,10 @@ export function DoctorRegistrationPage({ auth }: DoctorRegistrationPageProps) {
       setStatus(result.message);
       setStatusType('success'); // Success message
       
-      // Navigate to login after successful registration
+      // Navigate to login after successful registration (long enough to read that an admin must activate the account)
       setTimeout(() => {
         navigate("/doctors/login");
-      }, 2000);
+      }, 6000);
     } catch (error) {
       setStatus(parseErrorMessage(error));
       setStatusType('error'); // Error message
@@ -177,7 +177,7 @@ export function DoctorRegistrationPage({ auth }: DoctorRegistrationPageProps) {
         <LabeledField
           id="doctor-password"
           label="Password"
-          helpText="Minimum 5 characters."
+          helpText="Minimum 8 characters."
           value={password}
           onChange={setPassword}
           type="password"

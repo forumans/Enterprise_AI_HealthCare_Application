@@ -63,7 +63,7 @@ from backend.app.api.routes.support import (
 from backend.app.core import timeutils
 from backend.app.models import Doctor
 from backend.app.services.availability_service import ensure_default_slots
-from backend.tests.integration._pg import CLINIC_TZ, TempDatabase, require_pg, seed_clinic
+from backend.tests.integration._pg import CLINIC_TZ, FAKE_HTTP, TempDatabase, require_pg, seed_clinic
 
 NY = ZoneInfo(CLINIC_TZ)
 
@@ -808,7 +808,7 @@ class CoreFlowTests(unittest.IsolatedAsyncioTestCase):
         async def can_log_in(email: str) -> bool:
             async with self.sessions() as s:
                 try:
-                    await login(request=LoginRequest(email=email, password="Secret12345"), db=s)
+                    await login(request=LoginRequest(email=email, password="Secret12345"), http_request=FAKE_HTTP, db=s)
                     return True
                 except HTTPException as exc:
                     self.assertEqual(exc.status_code, 401)

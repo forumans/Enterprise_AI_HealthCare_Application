@@ -49,6 +49,8 @@ class Settings:
     # Public URL of the web app, used to build links in emails (defaults to the first CORS origin)
     frontend_url: str = (os.getenv("FRONTEND_URL", "") or (os.getenv("CORS_ORIGINS") or "").split(",")[0]).strip().rstrip("/")
     password_reset_minutes: int = int(os.getenv("PASSWORD_RESET_MINUTES", "30"))
+    # Largest accepted document upload, in bytes (10 MB)
+    max_upload_size: int = int(os.getenv("MAX_UPLOAD_SIZE", "10485760"))
 
 
 # Create a singleton instance

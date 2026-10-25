@@ -34,15 +34,17 @@ function debugError(...args: unknown[]) {
 export const SESSION_ENDED_EVENT = "hc:session-ended";
 
 export async function request<T>(url: string, options?: RequestInit): Promise<T> {
+  // Path only for debug logs: query strings carry search terms (names, emails, phone numbers)
+  const logPath = url.split("?")[0];
   try {
     // Debug: Log the request details
     if (options?.headers && 'Authorization' in options.headers) {
       const authHeader = options.headers.Authorization as string;
-      debugLog("Making authenticated request to:", `${baseUrl}${url}`);
+      debugLog("Making authenticated request to:", `${baseUrl}${logPath}`);
       debugLog("Auth header present:", authHeader ? "Yes" : "No");
       debugLog("Auth header starts with Bearer:", authHeader.startsWith("Bearer ") ? "Yes" : "No");
     } else {
-      debugLog("Making unauthenticated request to:", `${baseUrl}${url}`);
+      debugLog("Making unauthenticated request to:", `${baseUrl}${logPath}`);
     }
     
     const response = await fetch(`${baseUrl}${url}`, {
@@ -57,7 +59,8 @@ export async function request<T>(url: string, options?: RequestInit): Promise<T>
 
     if (!response.ok) {
       const errorText = await response.text();
-      debugError("Error response body:", errorText);
+      // The body may contain personal data, so only the status is logged
+      debugError(`Request to ${logPath} failed with status ${response.status}`);
 
       const sentToken = Boolean(options?.headers && (options.headers as Record<string, string>).Authorization);
       if (response.status === 401 && sentToken) {
@@ -84,11 +87,11 @@ export async function request<T>(url: string, options?: RequestInit): Promise<T>
     return data;
   } catch (error) {
     if (error instanceof Error) {
-      debugError(`Fetch error for ${url}:`, error);
+      debugError(`Fetch error for ${logPath}:`, error);
       debugError("Error type:", error.constructor.name);
       debugError("Error message:", error.message);
     } else {
-      debugError(`Fetch error for ${url}:`, error);
+      debugError(`Fetch error for ${logPath}:`, error);
     }
     
     // Check if it's a network error
@@ -201,31 +204,6 @@ export const api = {
       headers: withAuth(token),
     }),
 
-  patientPrescriptions: (token?: string) => {
-    debugLog('API: Making patientPrescriptions call to /patient/prescriptions');
-    debugLog('API: Token available:', !!token);
-    return request<Array<{
-      appointment_time: string;
-      patient_name: string;
-      doctor_name: string;
-      appointment_status: string;
-      appointment_note: string;
-      symptoms: string;
-      diagnosis: string;
-      lab_results: string;
-      medication_details: string;
-      pharmacy_name: string;
-      appointment_created_at: string;
-      status: string;
-    }>>('/patient/prescriptions', {
-      method: "GET",
-      headers: withAuth(token || ''),
-    }).catch(error => {
-      debugError('API: patientPrescriptions error:', error);
-      throw error;
-    });
-  },
-
   patientPrescriptionsFull: (token?: string, patientId?: string) => {
     debugLog('API: Making patientPrescriptionsFull call to /patient/prescriptions-full');
     debugLog('API: Token available:', !!token);
@@ -328,6 +306,17 @@ export const api = {
         body: JSON.stringify(requestBody),
       });
     },
+
+  /** Public: whether the deployment still needs its first administrator. */
+  getAdminSetupStatus: () =>
+    request<{ setup_required: boolean }>("/admin/setup-status", { method: "GET" }),
+
+  /** Public first-time setup: creates the first administrator (refused once any admin exists). */
+  bootstrapAdmin: (payload: { full_name: string; email: string; password: string }) =>
+    request<{ message: string }>("/admin/register", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
 
   registerAdmin: (payload: { fullName: string; email: string; password: string; phone?: string }, token?: string) =>
     request<{ message: string }>("/admin/users", {
@@ -441,12 +430,6 @@ export const api = {
       headers: withAuth(token),
     }),
 
-  debugTenantInfo: (token: string) =>
-    request<{ identity: { tenant_id: string; user_id: string; role: string } }>("/tenants/debug", {
-      method: "GET",
-      headers: withAuth(token),
-    }),
-
   confirmAppointment: (appointmentId: string, token?: string) =>
     request<{ message: string }>(`/appointments/${appointmentId}/confirm`, {
       method: "POST",
@@ -517,6 +500,7 @@ export const api = {
     }),
 
   createMedicalRecord: (record: {
+    appointment_id: string;
     patient_id: string;
     diagnosis: string;
     notes: string;
@@ -529,7 +513,7 @@ export const api = {
     }),
 
   getMedicalRecordByAppointment: (appointmentId: string, token?: string) =>
-    request<Array<{ id: string; diagnosis: string; notes: string }>>(`/medical-records/${appointmentId}`, {
+    request<{ id: string; appointment_id: string; symptoms: string; diagnosis: string; lab_results: string | null }>(`/medical-records/${appointmentId}`, {
       method: "GET",
       headers: withAuth(token || ''),
     }),

@@ -131,7 +131,7 @@ export function AdminDeactivatePage({ auth }: AdminDeactivatePageProps) {
           <li>Deactivated users can't log in; their records and appointments are kept</li>
           <li>You can't deactivate your own account</li>
           <li>At least one admin account must always stay active</li>
-          <li>Someone already signed in stays signed in until their session expires or they sign out</li>
+          <li>Someone already signed in is signed out on their next action</li>
         </ul>
       </div>
     </section>

@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.dependencies import CurrentIdentity, get_current_identity, require_roles
 from ...core.database import get_db
-from ...models import MedicalRecord, Prescription, Pharmacy
+from ...models import Appointment, Doctor, MedicalRecord, Patient, Prescription, Pharmacy
 from ...services.audit_service import write_audit_log
 
 router = APIRouter(prefix="/prescriptions")
@@ -39,6 +39,36 @@ async def create_prescription(
     ).scalar_one_or_none()
     if medical_record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Medical record not found.")
+
+    if (identity.role or "").upper() == "DOCTOR":
+        # Only for a record of the calling doctor's own appointment
+        owns_record = (
+            await db.execute(
+                select(Appointment.id)
+                .join(Doctor, Doctor.id == Appointment.doctor_id)
+                .where(
+                    Appointment.id == medical_record.appointment_id,
+                    Appointment.tenant_id == identity.tenant_id,
+                    Doctor.user_id == identity.user_id,
+                    Doctor.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if owns_record is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Medical record not found.")
+
+    if payload.pharmacy_id:
+        pharmacy = (
+            await db.execute(
+                select(Pharmacy.id).where(
+                    Pharmacy.id == payload.pharmacy_id,
+                    Pharmacy.tenant_id == identity.tenant_id,
+                    Pharmacy.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if pharmacy is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pharmacy not found.")
 
     prescription = Prescription(
         tenant_id=identity.tenant_id,
@@ -93,7 +123,7 @@ async def get_pharmacies(
             }
             for pharmacy in pharmacies
         ]
-    except Exception as e:
+    except Exception:
         raise HTTPException(status_code=500, detail="Failed to fetch pharmacies")
 
 
@@ -103,17 +133,22 @@ async def get_prescription(
     identity: CurrentIdentity = Depends(require_roles("ADMIN", "DOCTOR", "PATIENT")),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    prescription = (
-        await db.execute(
-            select(Prescription).where(
-                and_(
-                    Prescription.id == prescription_id,
-                    Prescription.tenant_id == identity.tenant_id,
-                    Prescription.deleted_at.is_(None),
-                )
-            )
+    stmt = select(Prescription).where(
+        and_(
+            Prescription.id == prescription_id,
+            Prescription.tenant_id == identity.tenant_id,
+            Prescription.deleted_at.is_(None),
         )
-    ).scalar_one_or_none()
+    )
+    if (identity.role or "").upper() == "PATIENT":
+        # Patients may read only prescriptions from their own appointments
+        stmt = (
+            stmt.join(MedicalRecord, MedicalRecord.id == Prescription.medical_record_id)
+            .join(Appointment, Appointment.id == MedicalRecord.appointment_id)
+            .join(Patient, Patient.id == Appointment.patient_id)
+            .where(Patient.user_id == identity.user_id, Patient.tenant_id == identity.tenant_id)
+        )
+    prescription = (await db.execute(stmt)).scalar_one_or_none()
     if prescription is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prescription not found.")
 

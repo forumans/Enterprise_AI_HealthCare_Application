@@ -303,6 +303,10 @@ export function TodayAppointmentsPage({ auth, userData, appointments }: TodayApp
                     )}
                     <Link
                       to={`/doctors/consultation/${appointment.id}`}
+                      // Only confirmed appointments can be consulted (the server enforces this too)
+                      onClick={(e) => { if (appointment.status !== 'CONFIRMED') e.preventDefault(); }}
+                      aria-disabled={appointment.status !== 'CONFIRMED'}
+                      title={appointment.status === 'CONFIRMED' ? undefined : 'Confirm the appointment to start the consultation'}
                       style={{
                         display: 'inline-block',
                         padding: '8px 16px',

@@ -7,7 +7,7 @@
 import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../../api";
-import { parseErrorMessage, validateEmail } from "../../utils";
+import { browserTimeZone, parseErrorMessage, supportedTimeZones, validateEmail } from "../../utils";
 import { LabeledField } from "../common/LabeledField";
 import { StatusMessage } from "../common/StatusMessage";
 
@@ -19,6 +19,8 @@ export function AdminSetupPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
+  // The clinic's time zone; the person setting up is most likely at the clinic
+  const [timezone, setTimezone] = useState(browserTimeZone);
   const [error, setError] = useState("");
   const [doneMessage, setDoneMessage] = useState("");
   const [saving, setSaving] = useState(false);
@@ -43,7 +45,7 @@ export function AdminSetupPage() {
     setSaving(true);
     setError("");
     try {
-      const result = await api.bootstrapAdmin({ full_name: fullName.trim(), email: email.trim(), password });
+      const result = await api.bootstrapAdmin({ full_name: fullName.trim(), email: email.trim(), password, timezone });
       setDoneMessage(result.message);
     } catch (err) {
       setError(parseErrorMessage(err));
@@ -85,6 +87,18 @@ export function AdminSetupPage() {
             <LabeledField id="setup-email" label="Email" helpText="Use a valid email format, e.g., name@example.com." value={email} onChange={edit(setEmail)} type="email" autoComplete="email" required={true} />
             <LabeledField id="setup-password" label="Password" helpText={`Minimum ${MIN_PASSWORD_LENGTH} characters`} value={password} onChange={edit(setPassword)} type="password" autoComplete="new-password" required={true} />
             <LabeledField id="setup-confirm" label="Confirm Password" helpText="Re-enter the password" value={confirm} onChange={edit(setConfirm)} type="password" autoComplete="new-password" required={true} />
+            <div>
+              <label htmlFor="setup-timezone" style={{ fontSize: '14px', fontWeight: '700', color: '#d6ebfb', display: 'block', marginBottom: '6px' }}>Clinic Time Zone</label>
+              <select
+                id="setup-timezone"
+                value={timezone}
+                onChange={e => setTimezone(e.target.value)}
+                style={{ width: '100%', padding: '11px 12px', borderRadius: '10px', border: '1px solid rgba(136, 194, 227, 0.36)', fontSize: '14px', backgroundColor: 'rgba(9, 35, 55, 0.82)', color: '#eef8ff' }}
+              >
+                {supportedTimeZones(timezone).map(name => <option key={name} value={name}>{name.replace(/_/g, ' ')}</option>)}
+              </select>
+              <p style={{ color: '#b4cce2', fontSize: '12px', margin: '6px 0 0 0' }}>Office hours and every time in the app use this zone. Admins can change it later under Clinic Settings.</p>
+            </div>
             <button type="submit" className="button-primary" disabled={saving}>
               {saving ? 'Creating...' : 'Create Administrator'}
             </button>

@@ -1,22 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { localSlotKey, rescheduleSlotState } from "./index";
+import { clinicSlotKey, rescheduleSlotState, zonedTimeToDate } from "./index";
 
-// Cells are built in the machine's local time, like the calendar grid, so this passes in any time zone.
-const now = new Date(2026, 9, 23, 21, 30);
-const cell = (hour: number, day = 24) => new Date(2026, 9, day, hour);
+// Cells are built in the clinic's zone, like the calendar grid; the runner's own zone differs (Tokyo).
+const timeZone = "America/Los_Angeles";
+const now = zonedTimeToDate({ year: 2026, month: 10, day: 23 }, 21, timeZone);
+const nowPlusHalfHour = new Date(now.getTime() + 30 * 60_000);
+const cell = (hour: number, day = 24) => zonedTimeToDate({ year: 2026, month: 10, day }, hour, timeZone);
+const key = (hour: number, day = 24) => clinicSlotKey(cell(hour, day), timeZone);
 
 const ctx = (overrides: Partial<Parameters<typeof rescheduleSlotState>[1]> = {}) => ({
-  now,
-  currentKey: localSlotKey(cell(10)),
+  now: nowPlusHalfHour,
+  currentKey: key(10),
   statusByKey: new Map([
-    [localSlotKey(cell(10)), "BOOKED"],
-    [localSlotKey(cell(11)), "AVAILABLE"],
-    [localSlotKey(cell(12)), "BOOKED"],
-    [localSlotKey(cell(13)), "BLOCKED"],
-    [localSlotKey(cell(14)), "AVAILABLE"],
-    [localSlotKey(cell(21, 23)), "AVAILABLE"],
+    [key(10), "BOOKED"],
+    [key(11), "AVAILABLE"],
+    [key(12), "BOOKED"],
+    [key(13), "BLOCKED"],
+    [key(14), "AVAILABLE"],
+    [key(21, 23), "AVAILABLE"],
   ]),
   conflictKeys: new Set<string>(),
+  timeZone,
   ...overrides,
 });
 
@@ -36,7 +40,7 @@ describe("rescheduleSlotState", () => {
   });
 
   it("blocks times where the patient already has another appointment", () => {
-    expect(rescheduleSlotState(cell(14), ctx({ conflictKeys: new Set([localSlotKey(cell(14))]) }))).toBe("unavailable");
+    expect(rescheduleSlotState(cell(14), ctx({ conflictKeys: new Set([key(14)]) }))).toBe("unavailable");
   });
 
   it("never offers a slot that has started, even if still marked available", () => {
@@ -44,6 +48,6 @@ describe("rescheduleSlotState", () => {
   });
 
   it("shows an in-progress current appointment as past", () => {
-    expect(rescheduleSlotState(cell(21, 23), ctx({ currentKey: localSlotKey(cell(21, 23)) }))).toBe("past");
+    expect(rescheduleSlotState(cell(21, 23), ctx({ currentKey: key(21, 23) }))).toBe("past");
   });
 });

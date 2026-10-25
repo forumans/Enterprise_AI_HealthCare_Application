@@ -8,6 +8,8 @@ export interface SessionState {
   insuranceProvider?: string;
   insurancePolicyId?: string;
   insurancePolicyNumber?: string;
+  /** The clinic's IANA time zone; every time is shown in it */
+  clinicTimezone?: string;
 }
 
 export interface LoginResponse {
@@ -18,6 +20,7 @@ export interface LoginResponse {
   insurance_provider?: string;
   insurance_policy_id?: string;
   insurance_policy_number?: string;
+  clinic_timezone?: string;
 }
 
 export interface AppointmentRow {

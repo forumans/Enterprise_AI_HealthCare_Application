@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
@@ -20,15 +21,15 @@ from ...services.audit_service import write_audit_log
 router = APIRouter(prefix="/admin")
 
 
-def _appointment_window_starts(now: datetime) -> dict[str, datetime]:
+def _appointment_window_starts(now: datetime, tz: ZoneInfo) -> dict[str, datetime]:
     """Return dashboard window starts: clinic-local midnights, as UTC instants."""
 
-    today = clinic_today(now)
+    today = clinic_today(tz, now)
     return {
-        "today": clinic_day_start(today),
-        "week": clinic_day_start(today - timedelta(days=today.weekday())),
-        "month": clinic_day_start(today.replace(day=1)),
-        "year": clinic_day_start(today.replace(month=1, day=1)),
+        "today": clinic_day_start(today, tz),
+        "week": clinic_day_start(today - timedelta(days=today.weekday()), tz),
+        "month": clinic_day_start(today.replace(day=1), tz),
+        "year": clinic_day_start(today.replace(month=1, day=1), tz),
     }
 
 
@@ -173,7 +174,7 @@ async def admin_appointment_metrics(
     """Return aggregate appointment totals for dashboard time ranges."""
 
     now = utc_now()
-    windows = _appointment_window_starts(now)
+    windows = _appointment_window_starts(now, identity.clinic_tz)
 
     stmt = select(
         func.count(Appointment.id).label("total_appointments_to_date"),

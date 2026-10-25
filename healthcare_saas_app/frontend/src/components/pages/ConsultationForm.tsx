@@ -7,7 +7,8 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../../api";
-import { parseErrorMessage, delay, parseServerDate } from "../../utils";
+import { useClinicTimeZone } from "../../contexts/ClinicTimeZoneContext";
+import { parseErrorMessage, delay, formatInZone } from "../../utils";
 import { APPOINTMENT_STATUS_REDIRECT_DELAY } from "../../constants";
 import type { SessionState, ConsultationState } from "../../types/app";
 
@@ -30,6 +31,7 @@ export function ConsultationForm({ session, appointmentId }: ConsultationFormPro
   });
 
   // UI state
+  const timeZone = useClinicTimeZone();
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -183,12 +185,13 @@ export function ConsultationForm({ session, appointmentId }: ConsultationFormPro
             <div>
               <strong style={{ color: '#42b5f5' }}>Date & Time:</strong>
               <p style={{ margin: '4px 0 0 0', color: '#eef8ff' }}>
-                {parseServerDate(appointment.time).toLocaleString('en-US', {
+                {formatInZone(appointment.time, timeZone, {
                   weekday: 'short', 
                   month: 'short', 
                   day: 'numeric', 
                   hour: '2-digit', 
-                  minute: '2-digit'
+                  minute: '2-digit',
+                  timeZoneName: 'short'
                 })}
               </p>
             </div>

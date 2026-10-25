@@ -6,7 +6,8 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "../../api";
-import { isAppointmentUpcoming, parseErrorMessage, parseServerDate } from "../../utils";
+import { useClinicTimeZone } from "../../contexts/ClinicTimeZoneContext";
+import { isAppointmentUpcoming, parseErrorMessage, slotKeyToDate } from "../../utils";
 import type { SupportAppointmentRow } from "../../types";
 import { RescheduleAppointmentModal, formatDateTime, type RescheduleTarget } from "../common/RescheduleAppointmentModal";
 import { SlotPickerCalendar } from "../common/SlotPickerCalendar";
@@ -48,6 +49,7 @@ const actionButton =(color: string, busy = false): React.CSSProperties => ({
 
 export function SupportAppointmentsPage({ auth, mode }: SupportAppointmentsPageProps) {
   const token: string = auth.session.accessToken;
+  const timeZone = useClinicTimeZone();
   const [selectedId, setSelectedId] = useState("");
   const [rows, setRows] = useState<SupportAppointmentRow[]>([]);
   const [loadingRows, setLoadingRows] = useState(false);
@@ -143,7 +145,7 @@ export function SupportAppointmentsPage({ auth, mode }: SupportAppointmentsPageP
   };
 
   const handleCancel = async (row: SupportAppointmentRow) => {
-    if (!window.confirm(`Cancel ${row.patient_name}'s appointment with ${row.doctor_name} on ${formatDateTime(parseServerDate(row.appointment_time))}?`)) {
+    if (!window.confirm(`Cancel ${row.patient_name}'s appointment with ${row.doctor_name} on ${formatDateTime(row.appointment_time, timeZone)}?`)) {
       return;
     }
     setBusyId(row.id);
@@ -166,14 +168,15 @@ export function SupportAppointmentsPage({ auth, mode }: SupportAppointmentsPageP
     }
     setBooking(true);
     try {
-      // slotKey is a naive local-time cell key; convert to UTC for the API
+      // slotKey is a clinic-time cell key; convert to UTC for the API
+      const slot = slotKeyToDate(slotKey, timeZone);
       const booked = await api.bookAppointment(token, {
         doctor_id: bookingDoctorId,
         patient_id: bookingPatientId,
-        slot: new Date(slotKey).toISOString(),
+        slot: slot.toISOString(),
         reason: reason.trim()
       });
-      alert(`Appointment booked for ${formatDateTime(new Date(slotKey))}`);
+      alert(`Appointment booked for ${formatDateTime(slot, timeZone)}`);
       setSlotKey(null);
       setReason("");
       await refreshAfterChange();
@@ -247,7 +250,7 @@ export function SupportAppointmentsPage({ auth, mode }: SupportAppointmentsPageP
                         data-appointment-id={row.id}
                         style={{ backgroundColor: row.id === justBookedId ? 'rgba(40, 167, 69, 0.22)' : 'rgba(9, 32, 52, 0.82)', ...scrollTarget }}
                       >
-                        <td style={cellStyle}>{formatDateTime(parseServerDate(row.appointment_time))}</td>
+                        <td style={cellStyle}>{formatDateTime(row.appointment_time, timeZone)}</td>
                         <td style={cellStyle}>{mode === "patient" ? row.doctor_name : row.patient_name}</td>
                         <td style={cellStyle}>{row.reason || 'No notes'}</td>
                         <td style={{ ...cellStyle, color: '#49d7c2', fontWeight: '500' }}>{row.status}</td>
@@ -341,7 +344,7 @@ export function SupportAppointmentsPage({ auth, mode }: SupportAppointmentsPageP
                 />
                 <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '12px', marginTop: '16px', flexWrap: 'wrap' }}>
                   <span style={{ color: '#b4cce2', fontSize: '14px' }}>
-                    {slotKey ? `Selected: ${formatDateTime(new Date(slotKey))}` : 'Select an available slot'}
+                    {slotKey ? `Selected: ${formatDateTime(slotKeyToDate(slotKey, timeZone), timeZone)}` : 'Select an available slot'}
                   </span>
                   <button
                     onClick={handleBook}

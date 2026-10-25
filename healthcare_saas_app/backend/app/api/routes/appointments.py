@@ -38,8 +38,8 @@ class UpdateAppointmentRequest(BaseModel):
     reason: str = Field(min_length=5)
 
 
-def _week_bounds(from_date: date | None) -> tuple[datetime, datetime]:
-    return clinic_week_bounds(from_date or clinic_today())
+def _week_bounds(from_date: date | None, identity: CurrentIdentity) -> tuple[datetime, datetime]:
+    return clinic_week_bounds(from_date or clinic_today(identity.clinic_tz), identity.clinic_tz)
 
 
 async def _own_doctor_id(db: AsyncSession, identity: CurrentIdentity) -> str | None:
@@ -216,7 +216,7 @@ async def list_weekly_appointments(
     identity: CurrentIdentity = Depends(get_current_identity),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    start, end = _week_bounds(from_date)
+    start, end = _week_bounds(from_date, identity)
     return await _appointments_with_doctor_names(
         db, identity, Appointment.appointment_time >= start, Appointment.appointment_time < end, unknown_doctor=None,
     )

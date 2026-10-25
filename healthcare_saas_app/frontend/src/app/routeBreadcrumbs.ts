@@ -16,6 +16,7 @@ const routeLabelMap: Array<{ test: (path: string) => boolean; label: string }> =
   { test: (path) => path === "/admin/register-support-staff", label: "Home > Admin > Register Support Staff" },
   { test: (path) => path === "/admin/system-dashboard", label: "Home > Admin > System Dashboard" },
   { test: (path) => path === "/admin/deactivate", label: "Home > Admin > Deactivate" },
+  { test: (path) => path === "/admin/clinic-settings", label: "Home > Admin > Clinic Settings" },
   { test: (path) => path === "/support/login", label: "Home > Support Staff > Login" },
   { test: (path) => path === "/support/patient-appointments", label: "Home > Support Staff > Patient Appointments" },
   { test: (path) => path === "/support/doctor-appointments", label: "Home > Support Staff > Doctor Appointments" },

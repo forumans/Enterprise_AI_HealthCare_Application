@@ -12,6 +12,8 @@ export default mergeConfig(
     test: {
       environment: "jsdom",
       setupFiles: ["./src/test/setup.ts"],
+      // A browser zone unlike any clinic's in the tests: times must follow the clinic's zone, not the viewer's
+      env: { TZ: "Asia/Tokyo" },
       css: false,
     },
   })

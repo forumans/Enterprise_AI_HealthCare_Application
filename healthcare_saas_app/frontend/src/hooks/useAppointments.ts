@@ -31,7 +31,8 @@ export function useAppointments(session: SessionState) {
     appointmentId: ""
   });
 
-  const [fromDate, setFromDate] = useState(getTodayFormatted());
+  // Explicit week start chosen by the caller; empty means today in clinic time (resolved when used)
+  const [fromDate, setFromDate] = useState("");
   const location = useLocation();
 
   // Clear search results when navigating away from search page
@@ -96,10 +97,10 @@ export function useAppointments(session: SessionState) {
   }
 
   /**
-   * Loads doctor appointments (uses fromDate if no date provided)
+   * Loads doctor appointments (uses fromDate, else today in clinic time, if no date provided)
    */
   async function loadDoctorData(dateString?: string) {
-    const dateToUse = dateString || fromDate;
+    const dateToUse = dateString || fromDate || getTodayFormatted(session.clinicTimezone);
     return loadDoctorDataWithDate(dateToUse);
   }
 

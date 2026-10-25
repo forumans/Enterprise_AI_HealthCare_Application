@@ -64,7 +64,7 @@ export function PatientDetailsCard({ patientDetails, showOnHome = false }: Patie
         {patientDetails.date_of_birth && (
           <div>
             <label style={labelStyle}>Date of Birth</label>
-            <p style={valueStyle}>{new Date(patientDetails.date_of_birth).toLocaleDateString()}</p>
+            <p style={valueStyle}>{new Date(patientDetails.date_of_birth).toLocaleDateString("en-US", { timeZone: "UTC" })}</p>
           </div>
         )}
         {patientDetails.insurance_provider && (

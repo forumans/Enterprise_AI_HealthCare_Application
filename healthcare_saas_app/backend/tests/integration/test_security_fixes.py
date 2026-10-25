@@ -54,8 +54,6 @@ def local(day, hour: int) -> datetime:
 class SecurityFixTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         require_pg()
-        self._tz_patch = patch.object(timeutils, "CLINIC_TZ", NY)
-        self._tz_patch.start()
         self.db = await TempDatabase().create(migrate=True)
         conn = await self.db.connect()
         try:
@@ -86,16 +84,15 @@ class SecurityFixTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         await self.engine.dispose()
         await self.db.drop()
-        self._tz_patch.stop()
 
     def identity(self, who: str, role: str):
-        return SimpleNamespace(user_id=self.ids[f"{who}_user"], tenant_id=self.ids["tenant"], role=role)
+        return SimpleNamespace(user_id=self.ids[f"{who}_user"], tenant_id=self.ids["tenant"], role=role, clinic_tz=NY)
 
     async def _book(self, who: str, doctor: str, hour: int, day_offset: int = 2) -> str:
         async with self.sessions() as s:
             for doctor_id in (self.ids["doctor"], self.ids["doctor2"]):
-                await ensure_default_slots(s, (await s.execute(select(Doctor).where(Doctor.id == doctor_id))).scalar_one())
-        slot = local(timeutils.clinic_today() + timedelta(days=day_offset), hour)
+                await ensure_default_slots(s, (await s.execute(select(Doctor).where(Doctor.id == doctor_id))).scalar_one(), NY)
+        slot = local(timeutils.clinic_today(NY) + timedelta(days=day_offset), hour)
         payload = CreateAppointmentRequest(doctor_id=self.ids[doctor], slot=slot.isoformat(), reason="Regular checkup")
         async with self.sessions() as s:
             return (await create_appointment(payload=payload, identity=self.identity(who, "PATIENT"), db=s))["id"]
@@ -139,7 +136,7 @@ class SecurityFixTests(unittest.IsolatedAsyncioTestCase):
         p2_d1 = await self._book("patient2", "doctor", 11)
         p2_d2 = await self._book("patient2", "doctor2", 12)
         everyone = {p1_d1, p2_d1, p2_d2}
-        from_date = timeutils.clinic_today() + timedelta(days=2)
+        from_date = timeutils.clinic_today(NY) + timedelta(days=2)
 
         cases = [
             (self.identity("patient1", "PATIENT"), {p1_d1}),
@@ -168,7 +165,7 @@ class SecurityFixTests(unittest.IsolatedAsyncioTestCase):
     async def test_3_doctor_list_and_availability_stay_within_the_clinic(self):
         async with self.sessions() as s:
             names = [d["name"] for d in await list_doctors(identity=self.identity("patient1", "PATIENT"), db=s)]
-            await ensure_default_slots(s, (await s.execute(select(Doctor).where(Doctor.id == self.ids["other_doctor"]))).scalar_one())
+            await ensure_default_slots(s, (await s.execute(select(Doctor).where(Doctor.id == self.ids["other_doctor"]))).scalar_one(), NY)
             other_clinic_slots = await list_availability_next_30_days(
                 doctor_id=self.ids["other_doctor"], identity=self.identity("patient1", "PATIENT"), db=s
             )

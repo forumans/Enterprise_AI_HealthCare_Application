@@ -8,14 +8,25 @@ immediate feedback.
 
 - **BR-TIME-01** All instants SHALL be stored and exchanged in UTC (ISO-8601). API responses SHALL include an
   offset (`+00:00`). Clients SHALL treat a timestamp without an offset as UTC.
-- **BR-TIME-02** Each deployment has one clinic time zone, the IANA name in `CLINIC_TIMEZONE`
-  (default `America/New_York`). Office hours, "today", "this week", "this month" and "this year" are
-  computed in clinic time, with daylight-saving transitions handled by IANA rules (8 AM stays 8 AM local all
-  year; a DST day is 23 or 25 hours long).
+- **BR-TIME-02** Each clinic (tenant) has its own time zone, the IANA name in `tenants.timezone` (for example
+  `America/Chicago`, `Europe/London`, `Asia/Kolkata`). Office hours, "today", "this week", "this month" and
+  "this year" are computed in that clinic's time, with daylight-saving transitions handled by IANA rules (8 AM
+  stays 8 AM local all year; a DST day is 23 or 25 hours long). Two clinics in different zones never share a
+  calendar: each request uses the zone of the signed-in user's clinic. `CLINIC_TIMEZONE` (default
+  `America/New_York`) is only the zone given to a clinic created without one.
 - **BR-TIME-03** A clinic week runs Monday 00:00 to the next Monday 00:00 (clinic time).
-- **BR-TIME-04** The browser displays times in the viewer's local time zone and lays out booking grids in
-  local time. A grid cell is matched to a server slot by converting the server instant to a local wall-clock
-  key `YYYY-MM-DDTHH:00:00`. When booking, the client converts the chosen local cell back to a UTC instant.
+- **BR-TIME-04** The browser displays every time, and lays out every booking and availability grid, in
+  **clinic time**, whatever zone the viewer's device is in: a patient travelling or a support agent working
+  remotely sees the same 9:00 AM the doctor does. Login returns the clinic's zone (`clinic_timezone`). A grid
+  cell is matched to a server slot by converting the server instant to a clinic wall-clock key
+  `YYYY-MM-DDTHH:00:00`; when booking, the client converts the chosen cell back to a UTC instant in the clinic's
+  zone. Every calendar shows the zone under its heading, e.g. "All times are clinic time: PDT (America/Los Angeles)"
+  (`UI-DT-04`).
+- **BR-TIME-06** When a clinic's time zone changes, each doctor's future schedule keeps its local hours: open
+  and blocked slots move to the same local date and hour in the new zone (a 9 AM slot stays 9 AM), with block
+  reasons kept. Booked slots and their appointments keep their exact instant, since a patient holds that time,
+  and the local hour a booked slot occupied is reopened in the new zone. A moved slot that would be in the past
+  or collide with an existing slot is dropped. The change and the number of slots moved are audited.
 - **BR-TIME-05** Office hours SHALL be hourly slots starting at 8:00 AM through the slot starting at 11:00 PM
   clinic time (16 slots per day, 7 days a week). Slot length is 60 minutes. The constants
   `WORKDAY_FIRST_SLOT_HOUR = 8` and `WORKDAY_LAST_SLOT_HOUR = 23` SHALL be defined once on the backend and

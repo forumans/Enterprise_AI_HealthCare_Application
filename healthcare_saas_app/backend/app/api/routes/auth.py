@@ -30,7 +30,8 @@ from ...core.security import (
 )
 from ...core.dependencies import CurrentIdentity, get_current_identity, require_roles
 from ...core.database import get_db, set_db_tenant
-from ...models import Patient, User
+from ...core.timeutils import clinic_zone
+from ...models import Patient, Tenant, User
 from ...services.account_service import ensure_email_available
 from ...services.audit_service import write_audit_log
 from ...services.email_service import send_email
@@ -144,6 +145,7 @@ async def login(request: LoginRequest, http_request: Request, db: AsyncSession =
     await set_db_tenant(db, user.tenant_id, user.id)
 
     token = create_access_token(user_id=user.id, tenant_id=user.tenant_id, role=user.role)
+    clinic_timezone = (await db.execute(select(Tenant.timezone).where(Tenant.id == user.tenant_id))).scalar_one_or_none()
 
     # Fetch patient details if role is PATIENT
     patient_name = None
@@ -169,6 +171,8 @@ async def login(request: LoginRequest, http_request: Request, db: AsyncSession =
         "user_name": patient_name,
         "insurance_provider": insurance_provider,
         "insurance_policy_id": insurance_policy_id,
+        # The browser shows every time in the clinic's zone, not the viewer's
+        "clinic_timezone": clinic_zone(clinic_timezone).key,
     }
 
 

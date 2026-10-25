@@ -208,6 +208,10 @@ Self-service password reset sends email over SMTP. Set `SMTP_HOST`, `SMTP_PORT`,
 
 `005_add_support_staff_role.sql` adds `SUPPORT_STAFF` to the `user_role` enum and creates the `support_staff` table. Run it **before** deploying the backend that includes the Support Staff feature (`psql -v ON_ERROR_STOP=1 -f migrations/005_add_support_staff_role.sql`). It is idempotent, and older backends ignore the new enum value and table. Enum values can't be dropped in PostgreSQL, so there is no rollback script.
 
+### Migration 008: a time zone per clinic
+
+`008_add_tenant_timezone.sql` adds `tenants.timezone`. Existing clinics get the zone the deployment has been running in: `America/New_York` by default, or pass the old `CLINIC_TIMEZONE` with `PGOPTIONS="-c migration.clinic_timezone=America/Chicago"`. Run it **before** deploying the backend that reads the column (`aws_env_spin_up\scripts\run-migration.ps1 -MigrationFiles ...\008_add_tenant_timezone.sql`); the previous backend ignores it. It is idempotent. Afterwards each clinic's admin can change the zone under Admin > Clinic Settings, and the operator sets it when creating a clinic (`INSERT INTO tenants (name, domain, timezone) ...`). `CLINIC_TIMEZONE` now only sets the zone of a clinic created without one.
+
 RDS is in a private subnet, so `psql` needs a path into the VPC (SSM port-forward through a bastion, or a temporary bastion host) — it cannot be reached directly from a dev machine.
 
 ---

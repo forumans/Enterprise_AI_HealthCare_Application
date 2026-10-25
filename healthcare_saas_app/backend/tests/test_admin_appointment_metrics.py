@@ -1,11 +1,11 @@
 import unittest
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from backend.app.api.routes.admin import _appointment_window_starts, admin_appointment_metrics
-from backend.app.core import timeutils
+
+NEW_YORK = ZoneInfo("America/New_York")
 
 
 class _FakeMappingResult:
@@ -34,9 +34,7 @@ class _FakeDbSession:
 
 class AdminAppointmentMetricsTests(unittest.IsolatedAsyncioTestCase):
     def test_appointment_window_starts_are_clinic_local_midnights(self):
-        # Pin the clinic zone so the test doesn't depend on the CLINIC_TIMEZONE env var.
-        with patch.object(timeutils, "CLINIC_TZ", ZoneInfo("America/New_York")):
-            windows = _appointment_window_starts(datetime(2026, 3, 22, 18, 45, 30, tzinfo=UTC))  # 2:45 PM EDT
+        windows = _appointment_window_starts(datetime(2026, 3, 22, 18, 45, 30, tzinfo=UTC), NEW_YORK)  # 2:45 PM EDT
 
         self.assertEqual(windows["today"], datetime(2026, 3, 22, 4, tzinfo=UTC))  # midnight EDT
         self.assertEqual(windows["week"], datetime(2026, 3, 16, 4, tzinfo=UTC))   # Monday, EDT
@@ -45,13 +43,16 @@ class AdminAppointmentMetricsTests(unittest.IsolatedAsyncioTestCase):
 
     def test_today_window_follows_clinic_date_late_in_the_evening(self):
         # 11:30 PM EDT on Oct 22 is already Oct 23 in UTC; "today" must still be Oct 22 locally.
-        with patch.object(timeutils, "CLINIC_TZ", ZoneInfo("America/New_York")):
-            windows = _appointment_window_starts(datetime(2026, 10, 23, 3, 30, tzinfo=UTC))
+        windows = _appointment_window_starts(datetime(2026, 10, 23, 3, 30, tzinfo=UTC), NEW_YORK)
 
         self.assertEqual(windows["today"], datetime(2026, 10, 22, 4, tzinfo=UTC))
 
+    def test_windows_use_the_clinics_own_zone(self):
+        windows = _appointment_window_starts(datetime(2026, 10, 22, 20, tzinfo=UTC), ZoneInfo("America/Los_Angeles"))
+        self.assertEqual(windows["today"], datetime(2026, 10, 22, 7, tzinfo=UTC))  # midnight PDT
+
     async def test_admin_appointment_metrics_response_shape(self):
-        identity = SimpleNamespace(tenant_id="tenant-1")
+        identity = SimpleNamespace(tenant_id="tenant-1", clinic_tz=NEW_YORK)
         db = _FakeDbSession(
             {
                 "total_appointments_to_date": 120,

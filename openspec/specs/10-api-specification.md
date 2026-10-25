@@ -31,19 +31,20 @@ REST over HTTPS, JSON bodies (multipart for uploads). Every path below is served
 | Method & path | Auth | Body | Success | Errors |
 |---------------|------|------|---------|--------|
 | POST `/auth/register` | public (clinic per `AUTH-TENANT`) | `{full_name (3–255), email, phone?, password, insurance_provider?, insurance_policy_number?, date_of_birth? (YYYY-MM-DD), gender?, address_line1?, address_line2?, city?, state?, postal_code?, country?}` | 201 `{message:"Registration successful"}` | 409 duplicate email; 422 |
-| POST `/auth/login` | public | `{email, password, remember_me?}` | 200 `{access_token, refresh_token:"", role, tenant_id, user_name?, insurance_provider?, insurance_policy_id?}` | 401 "Authentication failed" |
+| POST `/auth/login` | public | `{email, password, remember_me?}` | 200 `{access_token, refresh_token:"", role, tenant_id, clinic_timezone, user_name?, insurance_provider?, insurance_policy_id?}` | 401 "Authentication failed" |
 | POST `/auth/forgot-password` | public | `{email}` | 200 fixed message (`AUTH-FP-02`) | — |
 | POST `/auth/reset-password` | public | `{token, new_password (≥8)}` | 200 `{message}` | 400 invalid/expired link; 422 |
 | POST `/doctors/register` | public | `{full_name, email, password, specialty?, license_number?, phone?, date_of_birth?}` | 201 `{message}` | 409; 422 |
-| POST `/admin/register` | public (bootstrap only) | `{full_name, email, password}` | 201 `{message}` | 400 clinic not resolvable; 403 once any admin exists; 409; 422 |
+| POST `/admin/register` | public (bootstrap only) | `{full_name, email, password, timezone?}` | 201 `{message}` | 400 clinic not resolvable; 403 once any admin exists; 409; 422 (incl. unknown time zone) |
 | GET `/admin/setup-status` | public | — | 200 `{setup_required}` | — |
 
 ## 4. Tenants
 
 | Method & path | Roles | Response |
 |---------------|-------|----------|
-| GET `/tenants/current` | any signed-in | `{id, name, domain}` |
-| GET `/tenants/{id}` | A (own tenant only) | `{id, name, domain}`; any other id → 404 |
+| GET `/tenants/current` | any signed-in | `{id, name, domain, timezone}` |
+| PATCH `/tenants/current` | A | body `{timezone}` (IANA name) → `{id, name, domain, timezone, slots_moved}`; 422 unknown zone (`BR-TIME-06`) |
+| GET `/tenants/{id}` | A (own tenant only) | `{id, name, domain, timezone}`; any other id → 404 |
 
 Tenants are created by the platform operator (SQL or seed script). There is no tenant-creation endpoint.
 

@@ -75,9 +75,6 @@ def local(day: date, hour: int) -> datetime:
 class CoreFlowTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         require_pg()
-        # Pin the clinic zone so the tests don't depend on the CLINIC_TIMEZONE env var.
-        self._tz_patch = patch.object(timeutils, "CLINIC_TZ", NY)
-        self._tz_patch.start()
         self.db = await TempDatabase().create(migrate=True)
         conn = await self.db.connect()
         try:
@@ -90,10 +87,9 @@ class CoreFlowTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         await self.engine.dispose()
         await self.db.drop()
-        self._tz_patch.stop()
 
     def identity(self, who: str, role: str):
-        return SimpleNamespace(user_id=self.ids[f"{who}_user"], tenant_id=self.ids["tenant"], role=role)
+        return SimpleNamespace(user_id=self.ids[f"{who}_user"], tenant_id=self.ids["tenant"], role=role, clinic_tz=NY)
 
     async def doctor(self, session: AsyncSession) -> Doctor:
         return (await session.execute(select(Doctor).where(Doctor.id == self.ids["doctor"]))).scalar_one()
@@ -112,7 +108,7 @@ class CoreFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_default_slots_cover_7_days_8am_to_11pm_across_dst(self):
         now = datetime(2030, 3, 9, 10, 0, tzinfo=UTC)  # 5 AM EST Sat; DST starts Sun 2030-03-10
         async with self.sessions() as s:
-            created = await ensure_default_slots(s, await self.doctor(s), now=now)
+            created = await ensure_default_slots(s, await self.doctor(s), NY, now=now)
 
         rows = await self.slots()
         self.assertEqual(created, 7 * 16)
@@ -128,7 +124,7 @@ class CoreFlowTests(unittest.IsolatedAsyncioTestCase):
         now = datetime(2030, 6, 10, 10, 0, tzinfo=UTC)  # 6 AM EDT
         day1, day3 = date(2030, 6, 11), date(2030, 6, 13)
         async with self.sessions() as s:
-            await ensure_default_slots(s, await self.doctor(s), now=now)
+            await ensure_default_slots(s, await self.doctor(s), NY, now=now)
 
         conn = await self.db.connect()
         try:  # the doctor customises day1 and clears day3 entirely
@@ -141,9 +137,9 @@ class CoreFlowTests(unittest.IsolatedAsyncioTestCase):
             await conn.close()
 
         async with self.sessions() as s:
-            created = await ensure_default_slots(s, await self.doctor(s), now=now)
+            created = await ensure_default_slots(s, await self.doctor(s), NY, now=now)
         async with self.sessions() as s:
-            created_again = await ensure_default_slots(s, await self.doctor(s), now=now)
+            created_again = await ensure_default_slots(s, await self.doctor(s), NY, now=now)
 
         rows = {r["slot_time"]: r["status"] for r in await self.slots()}
         self.assertEqual(created, 16)  # only day3 was re-created
@@ -157,7 +153,7 @@ class CoreFlowTests(unittest.IsolatedAsyncioTestCase):
 
         async def generate():
             async with self.sessions() as s:
-                return await ensure_default_slots(s, await self.doctor(s), now=now)
+                return await ensure_default_slots(s, await self.doctor(s), NY, now=now)
 
         await asyncio.gather(*(generate() for _ in range(4)))
         times = [r["slot_time"] for r in await self.slots()]
@@ -168,8 +164,8 @@ class CoreFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_book_cancel_rebook_evening_slot(self):
         async with self.sessions() as s:
-            await ensure_default_slots(s, await self.doctor(s))
-        tomorrow = timeutils.clinic_today() + timedelta(days=1)
+            await ensure_default_slots(s, await self.doctor(s), NY)
+        tomorrow = timeutils.clinic_today(NY) + timedelta(days=1)
         slot = local(tomorrow, 21)  # 9 PM clinic time
         payload = CreateAppointmentRequest(
             doctor_id=self.ids["doctor"], slot=slot.strftime("%Y-%m-%dT%H:%M:%S.000Z"), reason="Evening visit"
@@ -203,8 +199,8 @@ class CoreFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_patient_cannot_cancel_someone_elses_appointment(self):
         async with self.sessions() as s:
-            await ensure_default_slots(s, await self.doctor(s))
-        slot = local(timeutils.clinic_today() + timedelta(days=2), 10)
+            await ensure_default_slots(s, await self.doctor(s), NY)
+        slot = local(timeutils.clinic_today(NY) + timedelta(days=2), 10)
         payload = CreateAppointmentRequest(doctor_id=self.ids["doctor"], slot=slot.isoformat(), reason="Morning visit")
         async with self.sessions() as s:
             booked = await create_appointment(payload=payload, identity=self.identity("patient1", "PATIENT"), db=s)
@@ -231,8 +227,8 @@ class CoreFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_patient_and_doctor_reschedule_keeps_details_and_moves_slot(self):
         async with self.sessions() as s:
-            await ensure_default_slots(s, await self.doctor(s))
-        day = timeutils.clinic_today() + timedelta(days=2)
+            await ensure_default_slots(s, await self.doctor(s), NY)
+        day = timeutils.clinic_today(NY) + timedelta(days=2)
         original, by_patient, by_doctor = local(day, 10), local(day, 15), local(day + timedelta(days=1), 20)
         appointment_id = await self._book("patient1", original, reason="Knee pain review")
 
@@ -268,8 +264,8 @@ class CoreFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_reschedule_rejects_taken_slot_other_owner_and_past_time(self):
         async with self.sessions() as s:
-            await ensure_default_slots(s, await self.doctor(s))
-        day = timeutils.clinic_today() + timedelta(days=2)
+            await ensure_default_slots(s, await self.doctor(s), NY)
+        day = timeutils.clinic_today(NY) + timedelta(days=2)
         mine = await self._book("patient1", local(day, 10))
         await self._book("patient2", local(day, 11))
 
@@ -289,8 +285,8 @@ class CoreFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_patient_can_cancel_confirmed_appointment(self):
         async with self.sessions() as s:
-            await ensure_default_slots(s, await self.doctor(s))
-        slot = local(timeutils.clinic_today() + timedelta(days=2), 14)
+            await ensure_default_slots(s, await self.doctor(s), NY)
+        slot = local(timeutils.clinic_today(NY) + timedelta(days=2), 14)
         appointment_id = await self._book("patient1", slot)
         async with self.sessions() as s:
             await confirm_appointment(appointment_id=appointment_id, identity=self.identity("doctor", "DOCTOR"), db=s)
@@ -314,8 +310,8 @@ class CoreFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_doctor_can_cancel_only_own_appointments(self):
         async with self.sessions() as s:
-            await ensure_default_slots(s, await self.doctor(s))
-        slot = local(timeutils.clinic_today() + timedelta(days=2), 16)
+            await ensure_default_slots(s, await self.doctor(s), NY)
+        slot = local(timeutils.clinic_today(NY) + timedelta(days=2), 16)
         appointment_id = await self._book("patient1", slot)
         conn = await self.db.connect()
         try:  # a second doctor in the same clinic (reusing the admin user as its login)
@@ -348,7 +344,7 @@ class CoreFlowTests(unittest.IsolatedAsyncioTestCase):
             await conn.close()
         async with self.sessions() as s:
             other = (await s.execute(select(Doctor).where(Doctor.id == doctor_id))).scalar_one()
-            await ensure_default_slots(s, other)
+            await ensure_default_slots(s, other, NY)
         return doctor_id
 
     async def _slot_status(self, doctor_id: str, slot: datetime) -> str:
@@ -362,8 +358,8 @@ class CoreFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_reschedule_rejects_same_time_and_inactive_appointments(self):
         async with self.sessions() as s:
-            await ensure_default_slots(s, await self.doctor(s))
-        day = timeutils.clinic_today() + timedelta(days=2)
+            await ensure_default_slots(s, await self.doctor(s), NY)
+        day = timeutils.clinic_today(NY) + timedelta(days=2)
         same = await self._book("patient1", local(day, 9))
         completed = await self._book("patient1", local(day, 13))
         cancelled = await self._book("patient2", local(day, 17))
@@ -390,9 +386,9 @@ class CoreFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_doctor_cannot_reschedule_another_doctors_appointment(self):
         async with self.sessions() as s:
-            await ensure_default_slots(s, await self.doctor(s))
+            await ensure_default_slots(s, await self.doctor(s), NY)
         await self._second_doctor()
-        day = timeutils.clinic_today() + timedelta(days=2)
+        day = timeutils.clinic_today(NY) + timedelta(days=2)
         appointment_id = await self._book("patient1", local(day, 10))
 
         with self.assertRaises(HTTPException) as ctx:
@@ -402,9 +398,9 @@ class CoreFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_reschedule_rejects_time_the_patient_has_booked_with_another_doctor(self):
         async with self.sessions() as s:
-            await ensure_default_slots(s, await self.doctor(s))
+            await ensure_default_slots(s, await self.doctor(s), NY)
         other_doctor = await self._second_doctor()
-        day = timeutils.clinic_today() + timedelta(days=2)
+        day = timeutils.clinic_today(NY) + timedelta(days=2)
         mine = await self._book("patient1", local(day, 10))
         payload = CreateAppointmentRequest(doctor_id=other_doctor, slot=local(day, 15).isoformat(), reason="Second opinion")
         async with self.sessions() as s:
@@ -419,8 +415,8 @@ class CoreFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_reschedule_writes_audit_log_with_old_and_new_time(self):
         async with self.sessions() as s:
-            await ensure_default_slots(s, await self.doctor(s))
-        day = timeutils.clinic_today() + timedelta(days=3)
+            await ensure_default_slots(s, await self.doctor(s), NY)
+        day = timeutils.clinic_today(NY) + timedelta(days=3)
         appointment_id = await self._book("patient1", local(day, 8))
         await self._reschedule(appointment_id, local(day, 22), "patient1", "PATIENT")
 
@@ -551,8 +547,8 @@ class CoreFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_support_staff_books_on_behalf_of_a_patient(self):
         await self._register_support_staff()
         async with self.sessions() as s:
-            await ensure_default_slots(s, await self.doctor(s))
-        slot = local(timeutils.clinic_today() + timedelta(days=2), 9)
+            await ensure_default_slots(s, await self.doctor(s), NY)
+        slot = local(timeutils.clinic_today(NY) + timedelta(days=2), 9)
 
         payload = CreateAppointmentRequest(doctor_id=self.ids["doctor"], slot=slot.isoformat(), reason="Booked by phone", patient_id=self.ids["patient2"])
         async with self.sessions() as s:
@@ -566,8 +562,8 @@ class CoreFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self._slot_status(self.ids["doctor"], slot), "BOOKED")
 
         cases = [
-            (None, local(timeutils.clinic_today() + timedelta(days=2), 10), 422),  # patient_id missing
-            ("00000000-0000-0000-0000-000000000000", local(timeutils.clinic_today() + timedelta(days=2), 10), 404),
+            (None, local(timeutils.clinic_today(NY) + timedelta(days=2), 10), 422),  # patient_id missing
+            ("00000000-0000-0000-0000-000000000000", local(timeutils.clinic_today(NY) + timedelta(days=2), 10), 404),
             (self.ids["patient1"], timeutils.utc_now() - timedelta(hours=1), 400),  # in the past
         ]
         for patient_id, when, expected in cases:
@@ -581,8 +577,8 @@ class CoreFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_support_staff_updates_reschedules_and_cancels_any_appointment(self):
         await self._register_support_staff()
         async with self.sessions() as s:
-            await ensure_default_slots(s, await self.doctor(s))
-        day = timeutils.clinic_today() + timedelta(days=2)
+            await ensure_default_slots(s, await self.doctor(s), NY)
+        day = timeutils.clinic_today(NY) + timedelta(days=2)
         appointment_id = await self._book("patient1", local(day, 10), reason="Original reason")
 
         async with self.sessions() as s:
@@ -609,8 +605,8 @@ class CoreFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_support_staff_cannot_update_completed_appointment(self):
         await self._register_support_staff()
         async with self.sessions() as s:
-            await ensure_default_slots(s, await self.doctor(s))
-        appointment_id = await self._book("patient1", local(timeutils.clinic_today() + timedelta(days=2), 11))
+            await ensure_default_slots(s, await self.doctor(s), NY)
+        appointment_id = await self._book("patient1", local(timeutils.clinic_today(NY) + timedelta(days=2), 11))
         conn = await self.db.connect()
         try:
             await conn.execute("UPDATE appointments SET status = 'COMPLETED' WHERE id = $1", appointment_id)
@@ -626,9 +622,9 @@ class CoreFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_support_staff_lists_appointments_by_patient_or_doctor(self):
         await self._register_support_staff()
         async with self.sessions() as s:
-            await ensure_default_slots(s, await self.doctor(s))
+            await ensure_default_slots(s, await self.doctor(s), NY)
         other_doctor = await self._second_doctor()
-        day = timeutils.clinic_today() + timedelta(days=2)
+        day = timeutils.clinic_today(NY) + timedelta(days=2)
         first = await self._book("patient1", local(day, 9))
         await self._book("patient2", local(day, 10))
         payload = CreateAppointmentRequest(doctor_id=other_doctor, slot=local(day, 12).isoformat(), reason="Second opinion")
@@ -863,9 +859,9 @@ class CoreFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_slot_delete_respects_ownership_and_bookings_and_past_bookings_fail(self):
         await self._register_support_staff()
         async with self.sessions() as s:
-            await ensure_default_slots(s, await self.doctor(s))
+            await ensure_default_slots(s, await self.doctor(s), NY)
         other_doctor = await self._second_doctor()
-        day = timeutils.clinic_today() + timedelta(days=2)
+        day = timeutils.clinic_today(NY) + timedelta(days=2)
         booked, free = local(day, 9), local(day, 11)
         await self._book("patient1", booked)
 
@@ -1037,8 +1033,8 @@ class CoreFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_support_staff_blocks_and_unblocks_a_doctors_slot(self):
         await self._register_support_staff()
         async with self.sessions() as s:
-            await ensure_default_slots(s, await self.doctor(s))
-        slot = local(timeutils.clinic_today() + timedelta(days=2), 15)
+            await ensure_default_slots(s, await self.doctor(s), NY)
+        slot = local(timeutils.clinic_today(NY) + timedelta(days=2), 15)
 
         async def change(available: bool, identity, doctor_id=None):
             payload = UpsertDoctorAvailabilityRequest(slot=slot.isoformat(), is_available=available, block_reason="Staff meeting", doctor_id=doctor_id)
@@ -1063,9 +1059,9 @@ class CoreFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_slot_changes_by_path_respect_doctor_ownership_and_bookings(self):
         async with self.sessions() as s:
-            await ensure_default_slots(s, await self.doctor(s))
+            await ensure_default_slots(s, await self.doctor(s), NY)
         other_doctor = await self._second_doctor()
-        day = timeutils.clinic_today() + timedelta(days=2)
+        day = timeutils.clinic_today(NY) + timedelta(days=2)
         booked = local(day, 16)
         await self._book("patient1", booked)
 

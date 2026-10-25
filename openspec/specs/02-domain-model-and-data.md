@@ -47,6 +47,7 @@ users 1───* audit_logs (performed_by)
 | id | uuid PK | |
 | name | varchar(255) NOT NULL | 2–255 characters when created through the API |
 | domain | varchar(255) UNIQUE NULL | |
+| timezone | varchar(64) NOT NULL DEFAULT `America/New_York` | IANA zone of the clinic (`BR-TIME-02`); the API accepts only zones the server knows |
 | created_at | timestamptz | |
 
 ### 4.2 `users` (soft-deletable)
@@ -216,6 +217,7 @@ Pharmacies are reference data loaded per tenant (seed script or SQL). There is n
 | `005_add_support_staff_role.sql` | Adds `SUPPORT_STAFF` to `user_role`; creates `support_staff` with its audit trigger (idempotent; no rollback since enum values cannot be removed) |
 | `006_grant_app_user_access.sql` | Grants the app database user DML on all tables and sequences and sets default privileges for future tables |
 | `007_row_level_security.sql` | Row-level security on every tenant table plus the four cross-tenant lookup functions (`DATA-RLS`) |
+| `008_add_tenant_timezone.sql` | Adds `tenants.timezone`; existing clinics keep the zone the deployment ran in (`migration.clinic_timezone`, default `America/New_York`) |
 
 - **DATA-MIG-01** A migration SHALL be applied before the backend version that needs it is deployed.
 - **DATA-MIG-02** The application SHALL connect as a non-owner database user with only SELECT, INSERT,
@@ -232,7 +234,8 @@ Pharmacies are reference data loaded per tenant (seed script or SQL). There is n
 - **DATA-SEED-01** Each clinic is created by the platform operator with its web address in `tenants.domain`.
   Self-registration picks the clinic by the host the browser was on (`AUTH-TENANT`). On a brand-new
   deployment with no tenant, the first registration creates a default tenant (`name = "Default Tenant"`,
-  `domain = "default.local"`).
+  `domain = "default.local"`, `timezone` = `CLINIC_TIMEZONE`). The operator sets each clinic's `timezone` when
+  creating it; the first-admin setup and the clinic's admins can change it (`AUTH-BOOT-05`, `ADM-CLINIC`).
 - **DATA-SEED-02** Pharmacies SHALL be seeded per tenant. The consultation form handles an empty list.
 - **DATA-SEED-03** A deterministic, idempotent seed script SHOULD create a development tenant with one user per
   role, a few doctors with slots, patients, appointments in each status and pharmacies, using fictitious data

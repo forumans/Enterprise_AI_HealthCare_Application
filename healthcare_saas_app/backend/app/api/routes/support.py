@@ -166,7 +166,7 @@ async def support_list_appointments(
         .where(
             Appointment.tenant_id == identity.tenant_id,
             Appointment.deleted_at.is_(None),
-            Appointment.appointment_time >= clinic_day_start(clinic_today()),
+            Appointment.appointment_time >= clinic_day_start(clinic_today(identity.clinic_tz), identity.clinic_tz),
             Patient.deleted_at.is_(None),
         )
         .order_by(Appointment.appointment_time.asc())

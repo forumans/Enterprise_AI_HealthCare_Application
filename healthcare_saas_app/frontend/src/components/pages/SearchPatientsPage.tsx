@@ -7,7 +7,8 @@
 import React, { useState, useEffect } from "react";
 import { api } from "../../api";
 import { useAuthContext } from "../../contexts/AuthContext";
-import { parseErrorMessage, parseServerDate, searchQueryProblem } from "../../utils";
+import { useClinicTimeZone } from "../../contexts/ClinicTimeZoneContext";
+import { formatInZone, parseErrorMessage, searchQueryProblem } from "../../utils";
 import { LabeledField } from "../common/LabeledField";
 import type { SessionState, PatientSearchRow } from "../../types";
 
@@ -66,6 +67,7 @@ function DoctorDetails({ session, auth }: { session: SessionState; auth: any }) 
 
 // PatientSearchResults component
 function PatientSearchResults({ rows, session }: { rows: PatientSearchRow[]; session: SessionState }) {
+  const timeZone = useClinicTimeZone();
   function calculateAge(dob: string): number {
     if (!dob) return 0; // Return 0 if no DOB
     
@@ -290,15 +292,16 @@ function PatientSearchResults({ rows, session }: { rows: PatientSearchRow[]; ses
                   <td style={{ padding: '12px', color: '#eef8ff', borderBottom: '1px solid #334155' }}>
                     {row.prescription_date ? (
                       <div>
-                        <div>{parseServerDate(row.prescription_date).toLocaleDateString('en-US', {
+                        <div>{formatInZone(row.prescription_date, timeZone, {
                           year: 'numeric',
                           month: 'short',
                           day: 'numeric'
                         })}</div>
                         <div style={{ fontSize: '12px', color: '#b4cce2' }}>
-                          {parseServerDate(row.prescription_date).toLocaleTimeString('en-US', {
+                          {formatInZone(row.prescription_date, timeZone, {
                             hour: '2-digit',
-                            minute: '2-digit'
+                            minute: '2-digit',
+                            timeZoneName: 'short'
                           })}
                       </div>
                     </div>

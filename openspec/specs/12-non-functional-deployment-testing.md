@@ -14,7 +14,7 @@
 | NFR-MAINT-01 | Pinned dependencies | Exact versions in `requirements.txt` and a lockfile for npm; upgrades only after the full test suite passes |
 | NFR-MAINT-02 | Shared constants | Office hours, slot length and search rules defined once per tier and mirrored deliberately (`BR-TIME-05`) |
 | NFR-USAB-01 | Browser support | Current Chrome, Edge, Firefox, Safari; desktop first, usable at 360 px wide |
-| NFR-I18N-01 | Locale | English (US) text and formats; times in the viewer's local zone, rules in clinic time |
+| NFR-I18N-01 | Locale | English (US) text and formats; clinics in any IANA time zone; times shown and rules applied in the clinic's zone |
 | NFR-PRIV-01 | Data minimization | Each endpoint returns only the fields its screen needs (support staff never receive clinical fields) |
 
 ## 2. Configuration (environment variables)
@@ -28,7 +28,7 @@
 | `ACCESS_TOKEN_MINUTES` | yes | `30` | session length |
 | `CORS_ORIGINS` | yes | | comma-separated allowed origins |
 | `DB_SCHEMA_INIT_ON_STARTUP` | no | `false` | `true` only for local development |
-| `CLINIC_TIMEZONE` | no | `America/New_York` | IANA zone for office hours and clinic-day boundaries |
+| `CLINIC_TIMEZONE` | no | `America/New_York` | Zone given to a clinic created without one (each clinic's zone is `tenants.timezone`) |
 | `S3_BUCKET_NAME` | for documents | | private documents bucket |
 | `SMTP_HOST`, `SMTP_PORT` (587), `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_TLS` (true), `SMTP_FROM` | for reset email | | email is skipped (with a warning) when host or from is empty |
 | `FRONTEND_URL` | no | first CORS origin | base of reset links |
@@ -118,6 +118,9 @@
 - **TEST-BR-01** Every acceptance criterion in docs 05–08 (`*-AC-*`).
 - **TEST-BR-02** Booking race: two concurrent bookings of one slot → exactly one 201 and one 409.
 - **TEST-BR-03** DST: default slots and clinic-day/week boundaries on spring-forward and fall-back days.
+- **TEST-BR-05** Time zones: clinics in different zones (including half-hour offsets) get office hours, days and
+  weeks in their own zone; a zone change keeps local slot hours (`BR-TIME-06`); frontend tests run with a
+  browser zone (`Asia/Tokyo`) unlike any clinic's, so a grid or time that follows the viewer's zone fails.
 - **TEST-BR-04** Search: 1-character term rejected, `*` returns all, phone formatting ignored, email match
   case-insensitive, 50-result cap.
 - **TEST-UI-01** Token never written to `localStorage`/`sessionStorage`.

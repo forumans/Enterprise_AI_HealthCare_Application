@@ -1,7 +1,7 @@
 # Known Gaps — Current Code vs. Feature Specifications
 
 Found while reverse-engineering the code at commit `bc3b34c` (2026-10-25). GAP-02 and GAP-03 were fixed on
-2026-10-25 (branch `fix/gap-02-03-doctor-checks`); their IDs are not reused. The feature specs state the
+2026-10-25 (commit `aaa6535`); their IDs are not reused. The feature specs state the
 **intended** behavior; this file records where the running code differs, so that:
 
 - an agent rebuilding from the specs knows these are deliberate corrections, not omissions, and

@@ -11,7 +11,7 @@ all roles.
   buttons that open the matching login pages.
 - **AUTH-HOME-03** Show a "Latest Medical Breakthroughs" grid of 5 news cards (headline, source, summary,
   "Read more →" opening a web search for the headline and source in a new tab with `noopener,noreferrer`).
-  Show 5 skeleton cards while loading. The news source is pluggable; the reference build uses static content.
+  Show 5 skeleton cards while loading. The news source is pluggable; static content is used today.
 - **AUTH-HOME-04** The home page is reachable by every role. No breadcrumb is shown on it.
 
 ## 2. Login (one page per role)
@@ -21,7 +21,7 @@ all roles.
 | `/patients/login` | PATIENT | Patient Login | Access your medical records and appointments | "Don't have an account? Register" → `/patients/register` |
 | `/doctors/login` | DOCTOR | Doctor Login | Manage your appointments and patient consultations | "New doctor? Register here" → `/doctors/register` |
 | `/support/login` | SUPPORT_STAFF | Support Staff Login | Manage appointments and availability on behalf of patients and doctors | Text only: "Support staff accounts are created by an administrator" |
-| `/admin/login` | ADMIN | Admin Login | System administration and management | "First time setup? Register admin" (see `AUTH-BOOT`) |
+| `/admin/login` | ADMIN | Admin Login | System administration and management | While no admin exists: "First time setup? Create the first administrator" → `/admin/setup`; otherwise text only: "Administrator accounts are created by an existing administrator" (`AUTH-BOOT`) |
 
 - **AUTH-LOGIN-01** Fields: Email (type email, autocomplete `email`) and Password (autocomplete
   `current-password`). Submit button label: "Login as Patient", "Login as Doctor", "Login as Admin" or
@@ -64,8 +64,17 @@ all roles.
 
 - **AUTH-REGP-02** Each field has an info icon whose tooltip shows the rule text.
 - **AUTH-REGP-03** `POST /auth/register` creates the user (role `PATIENT`, active) and the patient profile in
-  the default tenant (see `DATA-SEED-01`), enforces `BR-ACC-01`, writes an audit entry and returns 201
+  the clinic resolved by `AUTH-TENANT`, enforces `BR-ACC-01`, writes an audit entry and returns 201
   "Registration successful".
+
+### 3a. Which clinic a self-registration joins (`AUTH-TENANT`)
+
+- **AUTH-TENANT-01** The clinic is the tenant whose `domain` equals the host the browser was on: the `Origin`
+  header's host (browsers send it on POST), else `X-Forwarded-Host`, else `Host`; compared case-insensitively.
+- **AUTH-TENANT-02** No match and exactly one tenant exists → that tenant (single-clinic deployments need no
+  configuration). No tenant at all → a default tenant is created. Several tenants and no match → 400
+  "Registration isn't available at this address. Please use your clinic's website or contact the clinic."
+- **AUTH-TENANT-03** Applies to patient, doctor and first-admin registration.
 - **AUTH-REGP-04** On success show "Registration successful! Please log in." and go to `/patients/login`.
   On failure show the server's message (for example the duplicate-email message), keeping the input.
 
@@ -74,20 +83,42 @@ all roles.
 - **AUTH-REGD-01** Fields: Full Name (VAL-01), Email (VAL-02), Phone (VAL-03), Password (VAL-04), Specialty
   (optional, "Medical specialty (optional)."), License Number (optional), Date of Birth (required, VAL-07,
   "Doctor must be at least 18 years old").
-- **AUTH-REGD-02** `POST /doctors/register` creates the user (role `DOCTOR`) and doctor profile in the default
-  tenant, enforces `BR-ACC-01`, returns 201 "Doctor registration successful for <name>".
-- **AUTH-REGD-03** On success show the server message and navigate to `/doctors/login` after 2 seconds.
+- **AUTH-REGD-02** `POST /doctors/register` creates the user (role `DOCTOR`, **deactivated**) and doctor profile
+  in the clinic resolved by `AUTH-TENANT`, enforces `BR-ACC-01`, writes an audit entry, and returns 201 "Registration received. An
+  administrator must activate your account before you can sign in."
+- **AUTH-REGD-03** On success show the server message and navigate to `/doctors/login` after 6 seconds.
   A "Back to login" style button also goes to `/doctors/login`.
-- **AUTH-REGD-04** Self-registered doctors are immediately bookable once they have slots (no approval step).
-  Production deployments SHOULD add an approval step or disable self-registration (doc 13).
+- **AUTH-REGD-04 Approval.** A self-registered doctor cannot sign in (login returns the generic 401) until an admin
+  activates the account on Admin > Deactivate (`ADM-DEACT`). Admin-created doctors are active immediately.
 
 ## 5. First administrator bootstrap (`AUTH-BOOT`)
 
-- **AUTH-BOOT-01** `POST /admin/register` (public) creates an `ADMIN` user in the default tenant. It exists so
-  a new deployment can get its first administrator.
-- **AUTH-BOOT-02** It SHALL create the `admins` profile row as well (`BR-ACC-02`).
-- **AUTH-BOOT-03** It SHALL be refused once the tenant has any active admin (403), so it cannot be used to
-  take over a running clinic. All further admins are created by an admin (doc 08).
+- **AUTH-BOOT-01** `POST /admin/register` (public) creates an `ADMIN` user in the clinic resolved by
+  `AUTH-TENANT`. It exists so a brand-new deployment can get its very first administrator.
+- **AUTH-BOOT-02** It SHALL create the `admins` profile row as well (`BR-ACC-02`) and write an audit entry.
+- **AUTH-BOOT-03** It SHALL be refused as soon as **any** clinic has an active admin (403 "An administrator
+  already exists. Ask an administrator to create your account."), so it can't be used to take over a running
+  clinic or to claim a clinic the operator just created. Admins of further clinics are created by the platform
+  operator; further admins of a clinic by its admins (doc 08).
+- **AUTH-BOOT-04** `GET /admin/setup-status` (public) returns `{setup_required}` — true while no active admin
+  exists anywhere.
+- **AUTH-BOOT-05 First-Time Setup page (`/admin/setup`, public).** Heading "First-Time Setup". While setup is
+  required: text "Create the first administrator account. This page works only until an administrator exists.",
+  fields Full Name (VAL-01), Email (VAL-02), Password (VAL-04), Confirm Password (VAL-05), button "Create
+  Administrator" ("Creating..."); on success the server message and "Go to Admin Login". Once set up: the error
+  "This system is already set up. Administrator accounts are created by an existing administrator." and the
+  same link, no form.
+
+## 5a. Throttling of public endpoints (`AUTH-RATE`)
+
+- **AUTH-RATE-01** Login: at most 10 failed attempts per email and 50 per client address in 15 minutes; a
+  successful login clears that email's count. Forgot password: 5 requests per email and 20 per address in
+  15 minutes (reset submissions share the address limit). Self-registration (patient, doctor, bootstrap admin):
+  10 per address per hour.
+- **AUTH-RATE-02** Over the limit the server returns 429 "Too many attempts. Please wait a few minutes and try
+  again." with a `Retry-After` header. The client address is the first `X-Forwarded-For` hop, else the socket peer.
+- **AUTH-RATE-03** Counters are per server instance. Production SHOULD add a global limit with an AWS WAF
+  rate-based rule on CloudFront.
 
 ## 6. Forgot and reset password
 

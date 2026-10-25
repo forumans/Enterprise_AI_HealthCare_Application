@@ -87,7 +87,7 @@ Page heading: "Schedule / Cancel Appointment". Sections, top to bottom:
   admin (`ADM-ACCT`), which enforces `BR-ACC-01`.
 - **PAT-PROF-04** Profile updates SHALL write an audit entry with old and new values of changed fields.
 
-## 5. Documents (API only in the reference build)
+## 5. Documents (API; screen planned)
 
 - **PAT-DOC-01** A patient MAY upload a document for themselves via `POST /patient/documents` (multipart field
   `file`). The file is stored in the private bucket under `documents/<tenant>/<patient>/…`

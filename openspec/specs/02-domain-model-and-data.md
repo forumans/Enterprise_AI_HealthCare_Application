@@ -169,6 +169,27 @@ Pharmacies are reference data loaded per tenant (seed script or SQL). There is n
 | performed_by | uuid FK NULL → users | |
 | performed_at | timestamptz NOT NULL DEFAULT now | |
 
+## 4a. Row-level security (`DATA-RLS`)
+
+- **DATA-RLS-01** Every table with `tenant_id` (`users`, `patients`, `doctors`, `support_staff`, `admins`,
+  `doctor_availability`, `appointments`, `medical_records`, `prescriptions`, `pharmacies`, `patient_documents`,
+  `audit_logs`) SHALL have row-level security enabled with policy `tenant_isolation`:
+  `USING (tenant_id = app_current_tenant()) WITH CHECK (tenant_id = app_current_tenant())`, where
+  `app_current_tenant()` reads the transaction setting `app.current_tenant`.
+- **DATA-RLS-02** The backend SHALL set `app.current_tenant` and `app.current_user_id` with
+  `set_config(..., true)` (transaction-local) at the start of every transaction, from the verified token, or —
+  on public endpoints — from the tenant it resolved. With no setting, tenant tables appear empty.
+- **DATA-RLS-03** Lookups that must cross tenants before the tenant is known go only through `SECURITY DEFINER`
+  functions with a fixed `search_path`, returning the minimum columns:
+  `app_login_lookup(email)` and `app_reset_lookup(user_id)` → (id, tenant_id, role, password_hash) of an active,
+  non-deleted account; `app_email_in_use(email, tenant, exclude)` → boolean (`BR-ACC-01`);
+  `app_any_active_admin()` → boolean. `EXECUTE` is revoked from `PUBLIC` and granted to the app user.
+- **DATA-RLS-04** The app's database user SHALL NOT own the tables or have `BYPASSRLS`. The table owner (the
+  RDS master user) and superusers are not restricted (no `FORCE`), so migrations, backups and the functions
+  above keep working.
+- **DATA-RLS-05** If the functions don't exist (migration 007 not yet applied), the backend falls back to plain
+  queries, so code and migration can be deployed in either order.
+
 ## 5. Database triggers
 
 - **DATA-TRG-01 `sync_doctor_availability`** (AFTER INSERT OR UPDATE OR DELETE on `appointments`, per row):
@@ -194,6 +215,7 @@ Pharmacies are reference data loaded per tenant (seed script or SQL). There is n
 | `004_backfill_evening_availability_slots.sql` | One-time backfill of 5 PM–11 PM slots after office hours were extended (DST-safe, clinic zone configurable) |
 | `005_add_support_staff_role.sql` | Adds `SUPPORT_STAFF` to `user_role`; creates `support_staff` with its audit trigger (idempotent; no rollback since enum values cannot be removed) |
 | `006_grant_app_user_access.sql` | Grants the app database user DML on all tables and sequences and sets default privileges for future tables |
+| `007_row_level_security.sql` | Row-level security on every tenant table plus the four cross-tenant lookup functions (`DATA-RLS`) |
 
 - **DATA-MIG-01** A migration SHALL be applied before the backend version that needs it is deployed.
 - **DATA-MIG-02** The application SHALL connect as a non-owner database user with only SELECT, INSERT,
@@ -207,9 +229,10 @@ Pharmacies are reference data loaded per tenant (seed script or SQL). There is n
 
 ## 7. Seed and reference data
 
-- **DATA-SEED-01** On first use, if no tenant exists, the public registration endpoints SHALL create a
-  default tenant (`name = "Default Tenant"`, `domain = "default.local"`). Self-registered users join the
-  first tenant (see doc 13 on multi-tenant onboarding).
+- **DATA-SEED-01** Each clinic is created by the platform operator with its web address in `tenants.domain`.
+  Self-registration picks the clinic by the host the browser was on (`AUTH-TENANT`). On a brand-new
+  deployment with no tenant, the first registration creates a default tenant (`name = "Default Tenant"`,
+  `domain = "default.local"`).
 - **DATA-SEED-02** Pharmacies SHALL be seeded per tenant. The consultation form handles an empty list.
 - **DATA-SEED-03** A deterministic, idempotent seed script SHOULD create a development tenant with one user per
   role, a few doctors with slots, patients, appointments in each status and pharmacies, using fictitious data

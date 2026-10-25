@@ -55,8 +55,9 @@ consultations, and looks up patients' clinical history within their clinic.
   `SCHEDULED` blue) and actions: Confirm (`SCHEDULED`), Reschedule, Cancel (both `SCHEDULED`/`CONFIRMED`) with
   the same confirmations and messages as `DOC-WEEK-06`, and "Consultation".
 - **DOC-TODAY-04** "Consultation" is enabled only for `CONFIRMED` appointments (greyed, 50% opacity,
-  not-allowed cursor otherwise) and opens `/doctors/consultation/{id}`. The consultation endpoints SHALL also
-  reject non-`CONFIRMED` appointments (doc 13).
+  not-allowed cursor otherwise; clicking does nothing) and opens `/doctors/consultation/{id}`. Saving the
+  medical record SHALL also be refused by the server for appointments that aren't `CONFIRMED` ("Only confirmed
+  appointments can be consulted.").
 - **DOC-TODAY-05** Show an empty state when there are no appointments today.
 
 ## 4. Consultation (`/doctors/consultation/:appointmentId`)

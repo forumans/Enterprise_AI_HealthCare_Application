@@ -209,8 +209,8 @@ immediate feedback.
 
 ## 7. Field validation catalog (`VAL`)
 
-Apply the same rule wherever the field appears. "UI" is the client check; "API" is the server check. When the
-two differ, the stricter one is the requirement (see doc 13 for current deviations).
+Apply the same rule wherever the field appears. "UI" is the client check; "API" is the server check. Both
+SHALL enforce the rule; where only one is listed, the other SHALL match it.
 
 | ID | Field | Rule | Message |
 |----|-------|------|---------|

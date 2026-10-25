@@ -30,20 +30,22 @@ REST over HTTPS, JSON bodies (multipart for uploads). Every path below is served
 
 | Method & path | Auth | Body | Success | Errors |
 |---------------|------|------|---------|--------|
-| POST `/auth/register` | public | `{full_name (3–255), email, phone?, password, insurance_provider?, insurance_policy_number?, date_of_birth? (YYYY-MM-DD), gender?, address_line1?, address_line2?, city?, state?, postal_code?, country?}` | 201 `{message:"Registration successful"}` | 409 duplicate email; 422 |
+| POST `/auth/register` | public (clinic per `AUTH-TENANT`) | `{full_name (3–255), email, phone?, password, insurance_provider?, insurance_policy_number?, date_of_birth? (YYYY-MM-DD), gender?, address_line1?, address_line2?, city?, state?, postal_code?, country?}` | 201 `{message:"Registration successful"}` | 409 duplicate email; 422 |
 | POST `/auth/login` | public | `{email, password, remember_me?}` | 200 `{access_token, refresh_token:"", role, tenant_id, user_name?, insurance_provider?, insurance_policy_id?}` | 401 "Authentication failed" |
 | POST `/auth/forgot-password` | public | `{email}` | 200 fixed message (`AUTH-FP-02`) | — |
 | POST `/auth/reset-password` | public | `{token, new_password (≥8)}` | 200 `{message}` | 400 invalid/expired link; 422 |
 | POST `/doctors/register` | public | `{full_name, email, password, specialty?, license_number?, phone?, date_of_birth?}` | 201 `{message}` | 409; 422 |
-| POST `/admin/register` | public (bootstrap only) | `{full_name, email, password}` | 201 `{message}` | 403 once an admin exists; 409; 422 |
+| POST `/admin/register` | public (bootstrap only) | `{full_name, email, password}` | 201 `{message}` | 400 clinic not resolvable; 403 once any admin exists; 409; 422 |
+| GET `/admin/setup-status` | public | — | 200 `{setup_required}` | — |
 
 ## 4. Tenants
 
 | Method & path | Roles | Response |
 |---------------|-------|----------|
 | GET `/tenants/current` | any signed-in | `{id, name, domain}` |
-| POST `/tenants` | platform admin | body `{name (2–255), domain?}` → 201 `{id, name, domain}`; 409 duplicate domain |
-| GET `/tenants/{id}` | platform admin | `{id, name, domain}` / 404 |
+| GET `/tenants/{id}` | A (own tenant only) | `{id, name, domain}`; any other id → 404 |
+
+Tenants are created by the platform operator (SQL or seed script). There is no tenant-creation endpoint.
 
 ## 5. Doctors and availability
 
@@ -95,7 +97,7 @@ a patient/doctor without a profile gets `[]`.
 | GET `/patient/me` | P | `{id, name, email, phone, date_of_birth, insurance_provider, insurance_policy_number, address}` |
 | GET `/patient/patient/profile` | P | `{id, full_name, phone, date_of_birth, gender, address_line1, address_line2, city, state, postal_code, country, insurance_provider, insurance_policy_number}` |
 | PUT `/patient/patient/profile` | P | body camelCase `{fullName?, phone?, dateOfBirth?, gender?, addressLine1?, addressLine2?, city?, state?, postalCode?, country?, insuranceProvider?, insurancePolicyNumber?}` → `{message}` |
-| PATCH `/patient/profile` | P | `{full_name, phone}` → `{message:"Profile updated"}` (email not editable, doc 13) |
+| PATCH `/patient/profile` | P | `{full_name (3–255), phone (VAL-03)}` → `{message:"Profile updated"}`; the login email is not editable here |
 | GET `/patient/appointments/upcoming` | P | `[{id, date, doctor, status}]` |
 | GET `/patient/medical-history` | P | `[{date, doctor, diagnosis, notes}]` |
 | GET `/patient/prescriptions-full?patient_id=` | P (own; parameter ignored), D (patient_id required, same tenant) | `[{appointment_time, doctor_name, appointment_status, appointment_note, symptoms, diagnosis, lab_results, medication_details, pharmacy_name, appointment_created_at}]` COMPLETED only, newest first |
@@ -141,7 +143,7 @@ a patient/doctor without a profile gets `[]`.
 
 | Method & path | Input | Response |
 |---------------|-------|----------|
-| GET `/admin/users?page=1&page_size=25` | page ≥1, size 1–500 | `[{id, name, email, role, is_deleted}]` newest first |
+| GET `/admin/users?page=1&page_size=25` | page ≥1, size 1–500 | `[{id, name, email, role, is_deleted, is_active}]` newest first |
 | POST `/admin/users` | `ADM-REG-01` fields | 201 `{id}`; 409; 422; 503 |
 | GET `/admin/users/search?role=&q=` | role ∈ roles; `BR-SRCH` | `[{user_id, role, name, email, phone, address, date_of_birth, specialty, is_active, is_self}]` |
 | POST `/admin/users/{id}/reset-password` | `{new_password}` | `{message, user_id, user_email, user_role}`; 400 short; 404 |
@@ -153,13 +155,16 @@ a patient/doctor without a profile gets `[]`.
 | POST `/admin/reset-password` | `{email, role, new_password}` | legacy, by email+role |
 | POST `/admin/change-email` | `{email, role, new_email}` | legacy, by email+role |
 | GET `/admin/roles` | — | `[{value, label}]` Patients, Doctors, Support Staff, Admin |
-| GET `/admin/appointments?page=&page_size=` | | `[{id, date, doctor, patient, status}]` |
-| GET `/admin/reports` | | `{monthly_patient_count, diagnosis_frequency, doctor_utilization_rate}` |
+| GET `/admin/appointments?page=&page_size=` | | `[{id, date, doctor, doctor_name, patient, patient_name, status, is_cancelled}]` |
+| GET `/admin/reports` | | `{doctor_count, patient_count, monthly_patient_count, diagnosis_frequency, doctor_utilization_rate}` |
 | GET `/admin/appointment-metrics` | | `{total_appointments_to_date, …_year_to_date, …_this_month, …_this_week, …_today}` |
 | GET `/audit-logs?table=&date_from=&date_to=` | | `[{action, timestamp, performed_by, table, old, new}]` newest 200 |
-| `/users` (POST, GET, GET `/{id}`, PATCH `/{id}/soft-delete`, PATCH `/{id}/restore`) | | legacy user CRUD, same rules as `/admin/users*` |
 
 ## 14. Endpoints that SHALL NOT exist in production
 
-- `GET /tenants/debug` (echoes the token identity) and `GET /test/auth-check` are development aids. They SHALL be
-  removed or disabled outside development.
+- No debug endpoints (`/tenants/debug` was removed; the `/test/auth-check` router is not mounted).
+- `/docs`, `/redoc` and `/openapi.json` are disabled when `APP_ENV` is `production`.
+
+## 15. Rate-limit responses
+
+Public auth endpoints may return 429 with `Retry-After` (`AUTH-RATE`).

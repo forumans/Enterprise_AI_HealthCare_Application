@@ -15,14 +15,12 @@ roles, screens, business rules, validations, security model and deployment shape
    and acceptance criteria.
 4. Use **10** (API) and **11** (UI) as the contract between backend and frontend.
 5. Use **12** for configuration, deployment, observability and the test plan.
-6. Check **13** last. It lists where the current code falls short of these requirements, so you build the
-   intended behavior rather than copy a defect.
 
 ## Document map
 
 | # | File | Contents |
 |---|------|----------|
-| 01 | [01-product-overview.md](01-product-overview.md) | Purpose, scope, roles, glossary, tech stack, architecture |
+| 01 | [01-product-overview.md](01-product-overview.md) | Purpose, scope (incl. planned features), roles, glossary, tech stack, architecture, key design decisions |
 | 02 | [02-domain-model-and-data.md](02-domain-model-and-data.md) | Entities, fields, enums, constraints, triggers, migrations |
 | 03 | [03-business-rules.md](03-business-rules.md) | Scheduling, time zones, slots, appointment lifecycle, accounts, search, field validation catalog |
 | 04 | [04-role-guest-and-authentication.md](04-role-guest-and-authentication.md) | Home page, login, self-registration, forgot/reset password, sessions |
@@ -34,7 +32,6 @@ roles, screens, business rules, validations, security model and deployment shape
 | 10 | [10-api-specification.md](10-api-specification.md) | Every endpoint: roles, inputs, outputs, errors |
 | 11 | [11-ui-ux-specification.md](11-ui-ux-specification.md) | Layout, navigation, shared components, interaction patterns, styling |
 | 12 | [12-non-functional-deployment-testing.md](12-non-functional-deployment-testing.md) | Configuration, AWS deployment, migrations, observability, test plan |
-| 13 | [13-known-gaps-and-decisions.md](13-known-gaps-and-decisions.md) | Differences between the current code and these requirements; deferred features |
 
 ## Conventions
 
@@ -53,6 +50,4 @@ roles, screens, business rules, validations, security model and deployment shape
 
 ## Source of truth
 
-Where these documents and the code disagree, these documents describe the intended behavior. Document 13
-lists every known disagreement. When you change the application, update the matching requirement in the
-same change.
+These documents describe the application as built and as it must behave. When you change the application, update the matching requirement in the same change.

@@ -30,8 +30,8 @@ mandatory for every endpoint, including ones added later.
   `/api/health/ready`, `/api/health/live`), `/auth/login`, `/auth/register`, `/auth/forgot-password`,
   `/auth/reset-password`, `/doctors/register`, `/admin/register` — each with and without the `/api` prefix.
   Matching is by exact path. CORS preflight (`OPTIONS`) is always allowed. Everything else requires a token.
-- **SEC-AUTHN-05** Login SHOULD be rate-limited per IP and per email (for example 10 attempts per 15 minutes)
-  and failed attempts SHOULD be logged without the email (doc 13).
+- **SEC-AUTHN-05** Login, password reset and self-registration SHALL be rate-limited per email and per client
+  address (`AUTH-RATE`). Failed attempts SHALL NOT be logged with the email.
 
 ## 3. Passwords and reset tokens (`SEC-PWD`)
 
@@ -131,14 +131,15 @@ P = patient, D = doctor, S = support staff, A = admin. "own" = only records tied
   tenant-checked).
 - **SEC-TEN-04** Composite foreign keys SHALL prevent cross-tenant links where practical (appointments →
   slots use (`slot_id`, `tenant_id`)).
-- **SEC-TEN-05** Tenant creation and lookup by id are platform-operator functions. In a multi-clinic
-  deployment they SHALL be restricted to a platform super-admin, not a clinic admin (doc 13).
+- **SEC-TEN-05** Creating tenants is a platform-operator task (SQL or seed script); the API has no
+  tenant-creation endpoint. `GET /tenants/{id}` returns only the caller's own tenant (any other id → 404).
 - **SEC-TEN-06** Email uniqueness is global for active accounts (`BR-ACC-01`) because login is not
   tenant-qualified.
 - **SEC-TEN-07** Object storage keys SHALL start with `documents/<tenant_id>/<patient_id>/`, and a document's
   key SHALL only be presigned after the document row passed the tenant (and ownership) check.
-- **SEC-TEN-08** Defense in depth: the database SHOULD enable PostgreSQL row-level security on tenant tables,
-  keyed on `app.current_tenant` set per transaction, so a missing filter in code still cannot leak data.
+- **SEC-TEN-08** Defense in depth: PostgreSQL row-level security SHALL restrict every tenant table to the
+  tenant set for the transaction (`DATA-RLS`), so a missing filter in code still cannot leak data. Cross-tenant
+  reads happen only through the four `SECURITY DEFINER` lookups in `DATA-RLS-03`.
 - **SEC-TEN-09** Automated tests SHALL create two tenants and prove that every list and lookup endpoint returns
   nothing from the other tenant.
 
@@ -166,6 +167,11 @@ P = patient, D = doctor, S = support staff, A = admin. "own" = only records tied
 - **SEC-PHI-05** The frontend SHALL NOT log credentials, tokens or PHI to the browser console in production
   builds (debug logging only when `import.meta.env.DEV` or `VITE_ENABLE_DEBUG_LOGS=true`).
 - **SEC-PHI-06** Email bodies SHALL contain only what is needed (the reset link), not PHI.
+- **SEC-PHI-07** The database engine SHALL hide bound parameter values in errors and tracebacks
+  (`hide_parameters=True`). Email failures log only the exception type (SMTP errors can embed the recipient).
+- **SEC-PHI-08** Local access logs SHALL drop query strings (search terms carry names, emails and phone numbers)
+  and client addresses. Frontend debug logs SHALL log request paths without query strings and never response
+  bodies.
 
 ## 10. Web and transport security (`SEC-WEB`)
 
@@ -212,4 +218,4 @@ list.
 The controls above support HIPAA-style safeguards (access control, audit controls, integrity, transmission
 security). A production launch additionally needs: a signed BAA with the cloud provider, encryption at rest for
 RDS and S3 (enable), backup and retention policy, breach-notification procedure, workforce access reviews, and
-the hardening items in doc 13.
+periodic penetration testing.

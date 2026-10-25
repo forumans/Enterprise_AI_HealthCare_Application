@@ -71,7 +71,7 @@
   testing; automation SHALL NOT deploy on its own.
 - **NFR-DEP-09 CI (target).** Separate backend and frontend pipelines: lint, type-check, unit tests, build; the
   backend pipeline applies migrations before `sam deploy`; secrets come from the CI secret store; every deploy is
-  traceable to a commit SHA. (Not implemented yet; see doc 13.)
+  traceable to a commit SHA. (Planned; see doc 01 §2.2.)
 
 ## 4. Observability
 
@@ -93,7 +93,7 @@
 | Layer | Tooling | Runs | Scope |
 |-------|---------|------|-------|
 | Backend unit | Python `unittest` (`python -m unittest discover -s backend/tests -t .` from `healthcare_saas_app/`) | always | role guards per route, search helper, request validation, time utilities (DST), middleware wiring, token handling, health endpoints, login |
-| Backend integration | `unittest` against a disposable PostgreSQL (`HC_TEST_PG_ADMIN_URL`); each test creates and drops its own `hc_it_<random>` database from the baseline schema plus migrations | when the variable is set | migrations (data preserved, reruns, rollback), slot generation incl. DST and concurrency, booking/cancel/rebook via trigger, double-booking, reschedule rules, support staff flows, admin account flows, permissions, and an end-to-end HTTP suite that starts the real app with Uvicorn |
+| Backend integration | `unittest` against a disposable PostgreSQL; RLS tests and the HTTP suite connect as a non-superuser, non-owner role so policies are enforced; (`HC_TEST_PG_ADMIN_URL`); each test creates and drops its own `hc_it_<random>` database from the baseline schema plus migrations | when the variable is set | migrations (data preserved, reruns, rollback), slot generation incl. DST and concurrency, booking/cancel/rebook via trigger, double-booking, reschedule rules, support staff flows, admin account flows, permissions, and an end-to-end HTTP suite that starts the real app with Uvicorn |
 | Frontend unit | Vitest + Testing Library + user-event (`npm run test`) | always | pages and components with the API mocked: login, session-ended sign-out, header, password reset pages, admin pages, support appointments (search, scroll, booking, close-and-scroll-back), reschedule modal, slot state helpers, search validation |
 | End-to-end | Playwright | against running servers | critical journeys in a real browser |
 

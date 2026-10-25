@@ -149,6 +149,7 @@ Renders its children only when the session role is in the allowed list; otherwis
 | `/` | none | Home (`AUTH-HOME`) |
 | `/patients/login`, `/doctors/login`, `/support/login`, `/admin/login` | none | Login (`AUTH-LOGIN`) |
 | `/forgot-password`, `/reset-password` | none | `AUTH-FP`, `AUTH-RP` |
+| `/admin/setup` | none | First-Time Setup (`AUTH-BOOT-05`) |
 | `/patients/register` | none | `AUTH-REGP` |
 | `/doctors/register` | none | `AUTH-REGD` |
 | `/patients/appointments` · `/prescriptions` · `/billing` · `/profile` | PATIENT | doc 05 |

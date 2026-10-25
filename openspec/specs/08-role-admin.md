@@ -26,8 +26,9 @@ log. Admins do not book or treat; they only see their own tenant.
 - **ADM-DASH-01** Heading "System Dashboard". "Administrator" card: Name, Role, Tenant Name.
 - **ADM-DASH-02 System Overview** tiles: Total Doctors, Total Patients, Appointments (To Date), Appointments
   YTD, Appointments This Month, Appointments This Week, Appointments Today.
-- **ADM-DASH-03** Doctor and patient totals SHALL be server-side counts of non-deleted profiles in the tenant
-  (`GET /admin/reports` or a dedicated count), not counts of a paged user list.
+- **ADM-DASH-03** Doctor and patient totals SHALL be server-side counts (`doctor_count`, `patient_count` from
+  `GET /admin/reports`): profiles that aren't deleted and whose login isn't deleted or deactivated — never
+  counts of a paged user list.
 - **ADM-DASH-04** Appointment tiles come from `GET /admin/appointment-metrics`: counts of non-deleted
   appointments with `appointment_time <= now`, total and since the start of the clinic-local year, month,
   week (Monday) and day (`BR-TIME-02`). Future appointments are not counted.
@@ -35,7 +36,7 @@ log. Admins do not book or treat; they only see their own tenant.
   Admin.
 - **ADM-DASH-06 Recent Users (N)**: the 10 most recently created non-deleted users (`GET /admin/users`, newest
   first) with Name (profile name, else email), Email, Role, Status.
-- **ADM-DASH-07** `GET /admin/reports` returns `monthly_patient_count` (non-deleted patients),
+- **ADM-DASH-07** `GET /admin/reports` returns `doctor_count`, `patient_count`, `monthly_patient_count` (non-deleted patients),
   `diagnosis_frequency` (non-deleted medical records) and `doctor_utilization_rate` (completed appointments ÷
   doctors, 2 decimals; 0 with no doctors).
 
@@ -109,11 +110,10 @@ error on failure.
 
 - **ADM-DEL-01** `PATCH /admin/users/{id}/soft-delete` soft-deletes the user and profile (`BR-ACC-06`), with audit
   entries for both rows; returns "<ROLE> soft deleted successfully."
-- **ADM-DEL-02** `PATCH /admin/users/{id}/restore` (and `/users/{id}/restore`) restores (`BR-ACC-07`).
+- **ADM-DEL-02** `PATCH /admin/users/{id}/restore` restores (`BR-ACC-07`).
 - **ADM-DEL-03** The same self-protection as deactivation SHALL apply: an admin cannot delete their own account
   or the last active admin.
-- **ADM-DEL-04** A UI for soft delete/restore (list of deleted users with a Restore action) SHOULD be added;
-  today these are API-only.
+- **ADM-DEL-04** A screen for soft delete/restore is planned (doc 01 §2.2); the APIs above are complete.
 
 ## 8. Audit log (API)
 
@@ -125,9 +125,9 @@ error on failure.
 
 | Endpoint | Purpose |
 |----------|---------|
-| `GET /admin/users?page=&page_size=` (1–500, default 25) | Paged non-deleted users, newest first |
-| `GET /admin/appointments?page=&page_size=` | Paged appointments, newest time first |
-| `POST /tenants`, `GET /tenants/{id}` | Platform-level tenant management (see `SEC-TEN-05`) |
+| `GET /admin/users?page=&page_size=` (1–500, default 25) | Paged non-deleted users, newest first, with profile name and active flag (one query) |
+| `GET /admin/appointments?page=&page_size=` | Paged appointments, newest first, with doctor and patient names; cancelled visits included and flagged (`status = CANCELLED`, `is_cancelled`) |
+| `GET /tenants/{id}` | The admin's own tenant only (`SEC-TEN-05`) |
 | `POST /patients`, `POST /doctors` | Attach a profile to an existing user (legacy) |
 | `PATCH /appointments/{id}/status`, `DELETE /appointments/{id}` | Correct an appointment's status or cancel it |
 

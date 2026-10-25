@@ -29,14 +29,20 @@ Every record belongs to exactly one tenant. Users only ever see their own tenant
 | Administration | Dashboard (counts and appointment metrics), user registration, account management, audit log query |
 | Security | JWT sessions, RBAC on every endpoint, tenant isolation, audit trail, security headers, PHI-safe logging |
 
-### 2.2 Out of scope (deferred)
+### 2.2 Out of scope (planned for later releases)
 
-- Billing (a placeholder menu item and page exist; no functionality).
-- Clinics spanning several time zones (one clinic time zone per deployment today; see doc 13).
-- Self-service tenant sign-up and tenant administration UI.
-- Refresh tokens and "remember me" (the field exists and is ignored).
-- Notifications other than the password-reset email (no appointment reminders).
-- Real-time updates (pages refresh after each action).
+| Item | Notes |
+|------|-------|
+| Billing | A placeholder menu item and page exist; no functionality yet. |
+| Clinics in different time zones | One clinic time zone per deployment (`CLINIC_TIMEZONE`). Supporting several needs a per-tenant (or per-doctor) zone, slot generation and day boundaries per tenant, and grids rendered in clinic time with the viewer's offset shown. |
+| Tenant onboarding UI | Clinics are created by the platform operator (SQL or seed script), each with its web address in `tenants.domain`. |
+| Patient documents screen | The upload and list APIs exist; there is no screen yet. |
+| Soft delete / restore screen | The APIs exist; there is no screen yet. |
+| Refresh tokens / "remember me" | The field is accepted and ignored; users sign in again after the session ends. |
+| Notifications | Only the password-reset email; no appointment reminders. |
+| Real-time updates | Pages refresh after each action. |
+| CI/CD pipelines, structured JSON logs, alarms | Deployments run from operator scripts; logs are plain text (doc 12). |
+| Medical news feed | The home page shows static cards. |
 
 ## 3. Roles (personas)
 
@@ -149,6 +155,26 @@ app/
 migrations/          versioned, idempotent SQL files (no ORM migration tool)
 tests/               unit tests + PostgreSQL integration tests
 ```
+
+### 6.1a Key design decisions
+
+Keep these unless a change deliberately revisits them; each one is relied on elsewhere in these documents.
+
+| Decision | Rationale |
+|----------|-----------|
+| Token kept in memory only; reloading signs out | No token in browser storage for an XSS attack to steal; acceptable for clinic workstations. |
+| Account re-checked on every request (one indexed query) | Deactivation, deletion and role changes take effect immediately, without a token blacklist. |
+| Tenant isolation enforced twice: in every query and by PostgreSQL row-level security | A forgotten filter in code still can't expose another clinic's data. |
+| Email unique across all clinics for active accounts | Login isn't tenant-qualified, so one email must resolve to one account. |
+| The clinic for self-registration comes from the web address (`tenants.domain`) | Patients join the clinic whose site they used; one-clinic deployments need no setup. |
+| Cancel = soft delete + `CANCELLED` | History and audit are kept while the slot is freed; partial unique indexes ignore cancelled rows. |
+| Hourly slots 8 AM–11 PM, 7 days a week, generated lazily | Matches extended clinic hours; generation never overwrites a day the doctor edited. |
+| 7-day rolling generation, 5-week booking horizon, 30-day change window | Bounded data growth; doctors open further days by adding slots. |
+| Doctors may view clinic-wide patient history (audited) | Care-team model for small clinics; tenants can tighten it (`DOC-SRCH-05`). |
+| Support staff never see clinical data | Least privilege for non-clinical staff. |
+| Self-registered doctors start deactivated | An admin vouches for every doctor before they can sign in or be booked. |
+| SQL migrations instead of an ORM migration tool | Explicit, reviewable DDL that also runs from a temporary in-VPC Lambda. |
+| Lambda with one DB connection per environment | Prevents connection exhaustion under burst concurrency. |
 
 ### 6.2 Frontend layering
 

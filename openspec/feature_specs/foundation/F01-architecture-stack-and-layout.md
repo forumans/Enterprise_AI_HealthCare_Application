@@ -80,9 +80,10 @@ CloudFront ── /*      ──► S3 bucket (static SPA; 403/404 → /index.ht
 
 - **GEN-ARCH-01 Dual mounting.** All business routers SHALL be served both under `/api/...` and unprefixed
   (`/...`), so the backend works behind CloudFront's `/api/*` behavior and when called directly.
-  Health routes are served under `/api` only (§7).
+  Health routes are served both ways too (§7).
 - **GEN-ARCH-02** The backend SHALL be stateless: state lives in PostgreSQL, S3 and the client-held JWT. The
-  only in-process state is the rate-limit counters ([F04](F04-audit-privacy-errors-security.md)).
+  rate-limit counters are in PostgreSQL too ([F04](F04-audit-privacy-errors-security.md) §5); the in-process
+  fallback is used only before migration 009.
 - **GEN-ARCH-03** Each Lambda execution environment SHALL hold at most one DB connection: `pool_size=1`,
   `max_overflow=0`, `pool_pre_ping=True`, `hide_parameters=True`.
 - **GEN-ARCH-04** CORS SHALL be handled only by the application, never by API Gateway (duplicate headers break
@@ -203,8 +204,8 @@ frontend/src/
 | GET `/api/health/ready` | 200 `{"status":"ready","checks":{"database":true,"api":true},"service":"healthcare-backend"}` or 503 with `"status":"not_ready"` and `database:false` |
 | GET `/api/health/live` | 200 `{"status":"alive","service":"healthcare-backend","timestamp":"<UTC ISO>"}` |
 
-Health failures log only the exception type. `/health` (unprefixed) is listed as a public path in the
-middleware but is not routed (see [GAPS](../GAPS.md) GAP-01).
+Health failures log only the exception type. The same three endpoints are also served unprefixed (`/health`,
+`/health/ready`, `/health/live`) for direct calls; all six paths are public.
 
 ## 8. Key design decisions (keep unless deliberately revisited)
 

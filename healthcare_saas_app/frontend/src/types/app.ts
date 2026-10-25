@@ -81,12 +81,6 @@ export interface PatientRegistrationState {
   country: string;
 }
 
-export interface AppointmentBookingState {
-  doctorId: string;
-  slot: string;
-  reason: string;
-  appointmentId: string;
-}
 
 export interface ConsultationState {
   symptoms: string;

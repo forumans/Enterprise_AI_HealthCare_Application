@@ -89,12 +89,7 @@ export function LoginPage({ role }: LoginPageProps) {
       return; // Email validation will be handled by the form
     }
     
-    // Validate password (minimum 8 characters required)
-    if (loginForm.password.length < 8) {
-      setStatus("Password must be at least 8 characters.");
-      return;
-    }
-    
+    // No password-length check here: the server decides (an older account may have a shorter password)
     handleLogin(role);
   };
 

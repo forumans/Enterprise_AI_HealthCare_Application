@@ -1,7 +1,7 @@
 # Feature 09 — Patient: Schedule / Cancel Appointment
 
 **Roles:** P · **Route:** `/patients/appointments` (patient landing page) ·
-**API:** `GET /patient/patient/profile`, `GET /doctors`, `GET /doctor/availability/{id}/all`, `GET /appointments/all`,
+**API:** `GET /patient/patient/profile`, `GET /doctors`, `GET /doctor/availability/{id}/all`, `GET /appointments/all?include_cancelled=true`,
 `POST /appointments`, `DELETE /appointments/{id}`, `POST /appointments/{id}/reschedule` ·
 **Depends on:** 07, 08, F05, F06 (reschedule dialog) · **Traces to:** `PAT-INFO-01`, `PAT-BOOK-*`, `PAT-LIST-*`,
 `PAT-CANCEL-01`, `PAT-RESCHED-01`
@@ -88,8 +88,9 @@ All rules come from [07](07-appointment-lifecycle.md) (booking, reschedule, canc
 
 - **PAT-BOOK-06** A patient SHALL NOT book a time where they already have a live appointment with any doctor (UI
   greys it; DB index `unique_patient_time` enforces it).
-- Cancelled appointments are soft-deleted and therefore no longer returned by `/appointments/all`, so they leave
-  the page entirely (see GAP-13).
+- The page loads `GET /appointments/all?include_cancelled=true`, so cancelled appointments stay visible under
+  **Past** with status `CANCELLED` (pink) and no actions. Their times don't count as the patient's bookings in the
+  calendar or as reschedule conflicts.
 
 ## 4. Acceptance criteria
 

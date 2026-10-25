@@ -13,7 +13,7 @@ from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,10 +32,11 @@ from ...core.dependencies import CurrentIdentity, get_current_identity, require_
 from ...core.database import get_db, set_db_tenant
 from ...core.timeutils import clinic_zone
 from ...models import Patient, Tenant, User
-from ...services.account_service import ensure_email_available
+from ...services.account_service import PROFILE_MODELS, ensure_email_available
 from ...services.audit_service import write_audit_log
 from ...services.email_service import send_email
 from ...services.tenant_service import resolve_registration_tenant
+from ..validators import valid_birth_date, valid_email, valid_gender, valid_phone
 
 router = APIRouter(prefix="/auth")
 
@@ -56,6 +57,27 @@ class RegisterRequest(BaseModel):
     postal_code: str | None = None
     country: str | None = None
 
+    # Same rules as the registration form: the browser checks are a convenience only
+    @field_validator("email")
+    @classmethod
+    def _check_email(cls, value: str) -> str:
+        return valid_email(value)
+
+    @field_validator("phone")
+    @classmethod
+    def _check_phone(cls, value: str | None) -> str | None:
+        return valid_phone(value)
+
+    @field_validator("gender")
+    @classmethod
+    def _check_gender(cls, value: str | None) -> str | None:
+        return valid_gender(value)
+
+    @field_validator("date_of_birth")
+    @classmethod
+    def _check_date_of_birth(cls, value: date | None) -> date | None:
+        return valid_birth_date(value)
+
 
 class LoginRequest(BaseModel):
     email: str
@@ -74,7 +96,7 @@ class ResetPasswordRequest(BaseModel):
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
 async def register(request: RegisterRequest, http_request: Request, db: AsyncSession = Depends(get_db)) -> dict:
-    rate_limit.hit("register-ip", rate_limit.client_ip(http_request))
+    await rate_limit.hit(db, "register-ip", rate_limit.client_ip(http_request))
     tenant = await resolve_registration_tenant(db, http_request)
     await ensure_email_available(db, str(request.email).lower(), tenant.id)
 
@@ -131,24 +153,24 @@ async def login(request: LoginRequest, http_request: Request, db: AsyncSession =
     email = str(request.email).strip().lower()
     ip = rate_limit.client_ip(http_request)
     # Only failed attempts count, so a user who signs in correctly is never throttled
-    rate_limit.check("login-email", email)
-    rate_limit.check("login-ip", ip)
+    await rate_limit.check(db, "login-email", email)
+    await rate_limit.check(db, "login-ip", ip)
 
     # Login isn't tenant-qualified, so the account is found through the narrow cross-tenant lookup
     user = await cross_tenant.login_lookup(db, email)
 
     if not user or not verify_password(request.password, user.password_hash):
-        rate_limit.record("login-email", email)
-        rate_limit.record("login-ip", ip)
+        await rate_limit.record(db, "login-email", email)
+        await rate_limit.record(db, "login-ip", ip)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication failed")
-    rate_limit.clear("login-email", email)
+    await rate_limit.clear(db, "login-email", email)
     await set_db_tenant(db, user.tenant_id, user.id)
 
     token = create_access_token(user_id=user.id, tenant_id=user.tenant_id, role=user.role)
     clinic_timezone = (await db.execute(select(Tenant.timezone).where(Tenant.id == user.tenant_id))).scalar_one_or_none()
 
-    # Fetch patient details if role is PATIENT
-    patient_name = None
+    # Display name for every role; patients also get their insurance details
+    user_name = None
     insurance_provider = None
     insurance_policy_id = None
     if user.role == "PATIENT":
@@ -159,16 +181,26 @@ async def login(request: LoginRequest, http_request: Request, db: AsyncSession =
         )
         patient = (await db.execute(patient_stmt)).scalar_one_or_none()
         if patient:
-            patient_name = patient.full_name
+            user_name = patient.full_name
             insurance_provider = patient.insurance_provider
             insurance_policy_id = patient.insurance_policy_number
+    elif user.role in PROFILE_MODELS:
+        # Other roles get their profile name too (shown e.g. on the admin dashboard)
+        profile = PROFILE_MODELS[user.role]
+        user_name = (
+            await db.execute(
+                select(profile.full_name).where(
+                    profile.user_id == user.id, profile.tenant_id == user.tenant_id, profile.deleted_at.is_(None)
+                )
+            )
+        ).scalar_one_or_none()
 
     return {
         "access_token": token,
         "refresh_token": "",
         "role": user.role,
         "tenant_id": user.tenant_id,
-        "user_name": patient_name,
+        "user_name": user_name,
         "insurance_provider": insurance_provider,
         "insurance_policy_id": insurance_policy_id,
         # The browser shows every time in the clinic's zone, not the viewer's
@@ -196,8 +228,8 @@ async def forgot_password(request: ForgotPasswordRequest, http_request: Request,
     """
 
     email = str(request.email).strip().lower()
-    rate_limit.hit("reset-ip", rate_limit.client_ip(http_request))
-    rate_limit.hit("reset-email", email)
+    await rate_limit.hit(db, "reset-ip", rate_limit.client_ip(http_request))
+    await rate_limit.hit(db, "reset-email", email)
     user = await cross_tenant.login_lookup(db, email)
     if user is not None:
         await set_db_tenant(db, user.tenant_id, user.id)
@@ -225,7 +257,7 @@ async def forgot_password(request: ForgotPasswordRequest, http_request: Request,
 @router.post("/reset-password")
 async def reset_password(request: ResetPasswordRequest, http_request: Request, db: AsyncSession = Depends(get_db)) -> dict:
     """Set a new password using the token from a reset email."""
-    rate_limit.hit("reset-ip", rate_limit.client_ip(http_request))
+    await rate_limit.hit(db, "reset-ip", rate_limit.client_ip(http_request))
 
     claims = read_password_reset_token(request.token)
     if claims is None:

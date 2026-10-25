@@ -235,7 +235,7 @@ class HttpFlowTests(unittest.TestCase):
             ("patient: support patient search", "GET", "/support/patients?q=*", patient, None),
             ("patient: support profile", "GET", "/support/profile", patient, None),
             ("patient: block a doctor's slot", "POST", "/doctor/availability", patient, {"slot": other, "is_available": False, "doctor_id": doctor_id}),
-            ("doctor: another doctor's slot", "POST", f"/doctor/availability/{doctor_id}", doctor2, {"slot_time": other, "is_available": False}),
+            ("doctor: another doctor's slot", "POST", "/doctor/availability", doctor2, {"slot": other, "is_available": False, "doctor_id": doctor_id}),
             ("doctor: another doctor's appointment", "POST", f"/appointments/{appointment}/reschedule", doctor2, {"slot": other}),
             ("doctor: cancel another doctor's appointment", "DELETE", f"/appointments/{appointment}", doctor2, None),
             ("support staff: admin user search", "GET", "/admin/users/search?role=PATIENT&q=*", staff, None),

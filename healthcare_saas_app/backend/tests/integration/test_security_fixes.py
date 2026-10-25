@@ -36,7 +36,7 @@ from backend.app.api.routes.appointments import (
     update_appointment_status,
 )
 from backend.app.api.routes.auth import ForgotPasswordRequest, LoginRequest, RegisterRequest, ResetPasswordRequest
-from backend.app.api.routes.doctor import list_availability_next_30_days, list_doctors
+from backend.app.api.routes.doctor import list_all_availability, list_doctors
 from backend.app.core import timeutils
 from backend.app.core.dependencies import SESSION_ENDED, get_current_identity
 from backend.app.core.security import create_access_token, create_password_reset_token, hash_password
@@ -126,8 +126,18 @@ class SecurityFixTests(unittest.IsolatedAsyncioTestCase):
 
         await set_status(self.identity("doctor", "DOCTOR"), "COMPLETED")
         self.assertEqual(await self._status_of(mine), ("COMPLETED", False))
-        await set_status(self.identity("admin", "ADMIN"), "CONFIRMED")
-        self.assertEqual(await self._status_of(mine), ("CONFIRMED", False))
+        await set_status(self.identity("doctor", "DOCTOR"), "COMPLETED")  # repeating the status is a no-op
+        with self.assertRaises(HTTPException) as ctx:  # a completed visit can't be reopened, even by an admin
+            await set_status(self.identity("admin", "ADMIN"), "CONFIRMED")
+        self.assertEqual((ctx.exception.status_code, ctx.exception.detail), (400, "Can't change an appointment from COMPLETED to CONFIRMED."))
+        self.assertEqual(await self._status_of(mine), ("COMPLETED", False))
+
+        other = await self._book("patient2", "doctor", 11)
+        async with self.sessions() as s:  # an admin can still move a scheduled visit forward
+            await update_appointment_status(
+                appointment_id=other, payload=UpdateAppointmentStatusRequest(status="CONFIRMED"), identity=self.identity("admin", "ADMIN"), db=s
+            )
+        self.assertEqual(await self._status_of(other), ("CONFIRMED", False))
 
     # --- 2. appointment lists ---------------------------------------------------------------
 
@@ -166,8 +176,8 @@ class SecurityFixTests(unittest.IsolatedAsyncioTestCase):
         async with self.sessions() as s:
             names = [d["name"] for d in await list_doctors(identity=self.identity("patient1", "PATIENT"), db=s)]
             await ensure_default_slots(s, (await s.execute(select(Doctor).where(Doctor.id == self.ids["other_doctor"]))).scalar_one(), NY)
-            other_clinic_slots = await list_availability_next_30_days(
-                doctor_id=self.ids["other_doctor"], identity=self.identity("patient1", "PATIENT"), db=s
+            other_clinic_slots = await list_all_availability(
+                doctor_id=self.ids["other_doctor"], days=30, identity=self.identity("patient1", "PATIENT"), db=s
             )
         self.assertEqual(names, ["Dr Second", "Dr Test"])  # no "Dr Elsewhere" from the other clinic
         self.assertEqual(other_clinic_slots, [])

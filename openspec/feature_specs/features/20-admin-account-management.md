@@ -3,8 +3,7 @@
 **Roles:** A · **Routes:** `/admin/reset-password` ("Reset Password / Email"), `/admin/deactivate` ·
 **API:** `GET /admin/roles`, `GET /admin/users/search`, `POST /admin/users/{id}/reset-password`,
 `POST /admin/users/{id}/change-email`, `POST /admin/users/{id}/deactivate`, `POST /admin/users/{id}/activate`,
-`PATCH /admin/users/{id}/soft-delete`, `PATCH /admin/users/{id}/restore`, legacy `POST /admin/reset-password`,
-`POST /admin/change-email` · **Depends on:** 15, F03 (session re-check) · **Traces to:** `BR-ACC-*`, `ADM-ACCT-*`,
+`PATCH /admin/users/{id}/soft-delete`, `PATCH /admin/users/{id}/restore` · **Depends on:** 15, F03 (session re-check) · **Traces to:** `BR-ACC-*`, `ADM-ACCT-*`,
 `ADM-DEACT-*`, `ADM-DEL-*`
 
 ## 1. Account rules (`BR-ACC`)
@@ -23,7 +22,7 @@
 - **BR-ACC-05** (De)activating an account already in that state → **400 "This account is already active."** /
   **"This account is already deactivated."**.
 - **BR-ACC-06 Soft delete** sets `deleted_at`/`deleted_by` on the profile, and `is_active=false`, `deleted_at`
-  (and `deleted_by` — GAP-05) on the user. The person disappears from lists, searches and booking; their
+  and `deleted_by` on the user. The person disappears from lists, searches and booking; their
   appointments and records stay. Same self / last-admin protection (**400 "You can't delete your own account."**,
   409 last admin).
 - **BR-ACC-07 Restore** clears `deleted_at`/`deleted_by` on user and profile and sets `is_active=true`. Refused if not
@@ -89,8 +88,6 @@
 | `POST /admin/users/{user_id}/activate` | — | same with "Account activated successfully", `is_active: true` | 400 already; 403; 404 |
 | `PATCH /admin/users/{user_id}/soft-delete` | — | `{message: "<ROLE> soft deleted successfully."}` | 400 self; 404 (missing or already deleted); 409 last admin |
 | `PATCH /admin/users/{user_id}/restore` | — | `{message: "User restored."}` | 400 not deleted; 404; 409 email reused |
-| `POST /admin/reset-password` (legacy) | `{email, role, new_password}` | `{message, user_email, user_role, reset_by}` | 400 invalid role ("Invalid role. Must be one of: …"); 404 "User not found with the provided email and role combination"; 422 email format |
-| `POST /admin/change-email` (legacy) | `{email, role, new_email}` | `{message, old_email, new_email, user_role}` | 400 "The new email is the same as the current one."; plus the above |
 
 User lookups by id: `users.id = :id AND tenant_id = admin's tenant AND deleted_at IS NULL` (restore looks up
 deleted users too). Soft delete of an ADMIN or SUPPORT_STAFF also soft-deletes the `admins`/`support_staff` row;

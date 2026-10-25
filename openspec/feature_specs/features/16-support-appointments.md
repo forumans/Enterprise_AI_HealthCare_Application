@@ -50,7 +50,7 @@ Mounted with a distinct React `key` per mode, so switching routes resets state.
 4. **Book New Appointment for <name>** card:
    1. Embedded counterpart search panel (no card frame), keyed by subject + a reset counter so it starts fresh
       for each subject and after each booking. **The counterpart is always chosen by search — never a dropdown of
-      all patients; the screen SHALL NOT call `GET /patients`.**
+      all patients (the API has no full patient list; `*` in the search lists everyone).**
    2. Picking a counterpart shows "Booking with doctor: <b>name</b> (<specialty or 'General Practice'>)" or
       "Booking with patient: <b>name</b> (<phone>)" and scrolls smoothly to this block; resets the selected slot.
    3. "Appointment Reason \*" textarea (id `support-reason`, 3 rows, placeholder "Describe the reason for the
@@ -76,8 +76,7 @@ Mounted with a distinct React `key` per mode, so switching routes resets state.
 
 - Exactly one of `patient_id` or `doctor_id`, else **422 "Provide exactly one of patient_id or doctor_id."**.
 - Appointments of the tenant, not soft-deleted, `appointment_time >= start of clinic today`, joined to
-  non-deleted patients and to doctors (doctors SHOULD also be non-deleted — GAP-18), filtered by the id, ordered by
-  time.
+  non-deleted patients and non-deleted doctors, filtered by the id, ordered by time.
 - Item `{id, appointment_time, status, reason (notes or ""), patient_id, patient_name, doctor_id, doctor_name}`.
 
 Booking, reschedule, reason edit and cancel are the shared endpoints of [07](07-appointment-lifecycle.md); the
@@ -100,7 +99,7 @@ audit rows name the staff member as `performed_by`.
   appears for the patient and doctor, and the audit row's `performed_by` is the staff member.
 - **F16-AC-02** Given a successful booking on either screen, Then no search results and no calendar are visible,
   the page is scrolled to the new row, and it is highlighted.
-- **F16-AC-03** Given the Doctor Appointments screen, Then `GET /patients` is never requested.
+- **F16-AC-03** Given the Doctor Appointments screen, Then the patient for a booking is picked from a search, never a dropdown.
 - **F16-AC-04** Given a reason "abc", When editing, Then "Reason must be at least 5 characters." and no request.
 - **F16-AC-05** Given a patient or doctor from another clinic, Then they never appear and booking them returns 404.
 - **F16-AC-06** Given `GET /support/appointments` with both ids or neither, Then 422.

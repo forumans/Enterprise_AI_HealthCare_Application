@@ -6,7 +6,6 @@ import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from pydantic import BaseModel, Field
 from sqlalchemy import and_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,18 +13,12 @@ from ...core.dependencies import CurrentIdentity, get_current_identity, require_
 from ...core.database import get_db
 from ...core.timeutils import utc_now
 from ...core.storage import read_validated_upload, safe_filename, store_document
-from ...models import Appointment, Doctor, MedicalRecord, Patient, PatientDocument, Pharmacy, Prescription, User
+from ...models import Patient, PatientDocument, User
 from ...services.audit_service import write_access_log, write_audit_log
+from ..validators import optional_text, valid_birth_date, valid_full_name, valid_gender, valid_phone
 
 router = APIRouter(prefix="/patient")
 logger = logging.getLogger(__name__)
-
-
-class UpdateProfileRequest(BaseModel):
-    """Name and phone only: the login email is changed by an admin, who checks it isn't taken."""
-
-    full_name: str = Field(min_length=3, max_length=255)
-    phone: str = Field(pattern=r"^\+?[0-9\-\s]{10,15}$")
 
 
 PROFILE_FAILED = "Your profile couldn't be loaded or saved. Please try again."
@@ -75,65 +68,6 @@ async def get_current_patient(
         "emergency_contact": None,  # Not in patient model
         "emergency_phone": None,  # Not in patient model
     }
-
-
-@router.get("/appointments/upcoming")
-async def patient_upcoming_appointments(
-    identity: CurrentIdentity = Depends(require_roles("PATIENT")),
-    db: AsyncSession = Depends(get_db),
-) -> list[dict]:
-    patient = await _current_patient(identity, db)
-    stmt = (
-        select(Appointment)
-        .where(
-            and_(
-                Appointment.tenant_id == identity.tenant_id,
-                Appointment.patient_id == patient.id,
-                Appointment.deleted_at.is_(None),
-            )
-        )
-        .order_by(Appointment.appointment_time.asc())
-    )
-    rows = (await db.execute(stmt)).scalars().all()
-    return [
-        {
-            "id": row.id,
-            "date": row.appointment_time.isoformat(),
-            "doctor": row.doctor_id,
-            "status": row.status,
-        }
-        for row in rows
-    ]
-
-
-@router.get("/medical-history")
-async def patient_medical_history(
-    identity: CurrentIdentity = Depends(require_roles("PATIENT")),
-    db: AsyncSession = Depends(get_db),
-) -> list[dict]:
-    patient = await _current_patient(identity, db)
-    stmt = (
-        select(MedicalRecord, Appointment)
-        .join(Appointment, Appointment.id == MedicalRecord.appointment_id)
-        .where(
-            and_(
-                MedicalRecord.tenant_id == identity.tenant_id,
-                Appointment.patient_id == patient.id,
-                MedicalRecord.deleted_at.is_(None),
-                Appointment.deleted_at.is_(None),
-            )
-        )
-    )
-    rows = (await db.execute(stmt)).all()
-    return [
-        {
-            "date": appointment.appointment_time.isoformat(),
-            "doctor": appointment.doctor_id,
-            "diagnosis": record.diagnosis or "",
-            "notes": record.symptoms or "",
-        }
-        for record, appointment in rows
-    ]
 
 
 @router.get("/prescriptions-full")
@@ -222,32 +156,6 @@ async def patient_prescriptions_full(
     return prescriptions
 
 
-@router.patch("/profile")
-async def update_patient_profile(
-    payload: UpdateProfileRequest,
-    identity: CurrentIdentity = Depends(require_roles("PATIENT")),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    patient = await _current_patient(identity, db)
-    old_patient = {"full_name": patient.full_name, "phone": patient.phone}
-
-    patient.full_name = payload.full_name.strip()
-    patient.phone = payload.phone.strip()
-
-    await write_audit_log(
-        db,
-        tenant_id=identity.tenant_id,
-        table_name="patients",
-        record_id=patient.id,
-        action_type="UPDATE",
-        old_data=old_patient,
-        new_data={"full_name": patient.full_name, "phone": patient.phone},
-        performed_by=identity.user_id,
-    )
-    await db.commit()
-    return {"message": "Profile updated"}
-
-
 @router.post("/documents", status_code=status.HTTP_201_CREATED)
 async def upload_patient_document(
     file: UploadFile = File(...),
@@ -289,6 +197,19 @@ async def upload_patient_document(
 PATIENT_PROFILE_FIELDS = (
     "full_name", "phone", "date_of_birth", "gender", "address_line1", "address_line2", "city", "state",
     "postal_code", "country", "insurance_provider", "insurance_policy_number",
+)
+
+
+# (request key, Patient attribute, max length) of the optional text fields on Update Profile
+PATIENT_OPTIONAL_TEXT_FIELDS = (
+    ("addressLine1", "address_line1", 255),
+    ("addressLine2", "address_line2", 255),
+    ("city", "city", 100),
+    ("state", "state", 100),
+    ("postalCode", "postal_code", 20),
+    ("country", "country", 100),
+    ("insuranceProvider", "insurance_provider", 255),
+    ("insurancePolicyNumber", "insurance_policy_number", 255),
 )
 
 
@@ -377,31 +298,22 @@ async def update_patient_profile(
         
         old_data = {field: _json_value(getattr(patient, field)) for field in PATIENT_PROFILE_FIELDS}
 
-        # Update allowed fields (from the Patient model)
-        if "fullName" in payload and payload["fullName"]:
-            patient.full_name = payload["fullName"]
-        if "phone" in payload and payload["phone"]:
-            patient.phone = payload["phone"]
-        if "dateOfBirth" in payload and payload["dateOfBirth"]:
-            patient.date_of_birth = datetime.fromisoformat(payload["dateOfBirth"]).date()
+        # Name, phone and date of birth change only when given; an invalid value raises ValueError (422 below)
+        full_name = valid_full_name(payload.get("fullName"))
+        if full_name:
+            patient.full_name = full_name
+        phone = valid_phone(optional_text(payload.get("phone"), 50))
+        if phone:
+            patient.phone = phone
+        date_of_birth = optional_text(payload.get("dateOfBirth"), 10)
+        if date_of_birth:
+            patient.date_of_birth = valid_birth_date(datetime.fromisoformat(date_of_birth).date())
         if "gender" in payload:
-            patient.gender = payload["gender"]
-        if "addressLine1" in payload:
-            patient.address_line1 = payload["addressLine1"]
-        if "addressLine2" in payload:
-            patient.address_line2 = payload["addressLine2"]
-        if "city" in payload:
-            patient.city = payload["city"]
-        if "state" in payload:
-            patient.state = payload["state"]
-        if "postalCode" in payload:
-            patient.postal_code = payload["postalCode"]
-        if "country" in payload:
-            patient.country = payload["country"]
-        if "insuranceProvider" in payload:
-            patient.insurance_provider = payload["insuranceProvider"]
-        if "insurancePolicyNumber" in payload:
-            patient.insurance_policy_number = payload["insurancePolicyNumber"]
+            patient.gender = valid_gender(optional_text(payload["gender"], 20))
+        # The other fields are set whenever present; an empty value clears the stored one
+        for key, attribute, max_length in PATIENT_OPTIONAL_TEXT_FIELDS:
+            if key in payload:
+                setattr(patient, attribute, optional_text(payload[key], max_length))
         # Note: Email is in users table, not patients table
 
         new_data = {field: _json_value(getattr(patient, field)) for field in old_data}

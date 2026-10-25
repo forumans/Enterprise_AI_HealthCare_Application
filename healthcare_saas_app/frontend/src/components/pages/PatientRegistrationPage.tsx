@@ -7,6 +7,7 @@
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../../api";
+import { parseErrorMessage } from "../../utils";
 
 interface FieldErrors {
   name?: string;
@@ -176,7 +177,8 @@ export function PatientRegistrationPage() {
         navigate("/patients/login");
       } catch (error) {
         console.error("Registration failed:", error);
-        alert("Registration failed. Please try again.");
+        // Show why (e.g. "That email is already used by another account.")
+        alert(parseErrorMessage(error) || "Registration failed. Please try again.");
       } finally {
         setLoading(false);
       }

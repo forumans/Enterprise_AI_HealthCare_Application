@@ -11,7 +11,7 @@ import io
 import unittest
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, UploadFile
@@ -21,18 +21,27 @@ from sqlalchemy.pool import NullPool
 from starlette.datastructures import Headers
 
 from backend.app.api.routes import patient as patient_routes
-from backend.app.api.routes.admin import soft_delete_user
-from backend.app.api.routes.appointments import CreateAppointmentRequest, confirm_appointment, create_appointment
+from backend.app.api.routes.admin import admin_create_user, soft_delete_user
+from backend.app.api.routes.audit_logs import list_audit_logs
+from backend.app.api.routes.appointments import (
+    CreateAppointmentRequest,
+    confirm_appointment,
+    create_appointment,
+    delete_appointment,
+    list_all_appointments,
+)
 from backend.app.api.routes.auth import LoginRequest, login
 from backend.app.api.routes.doctor import (
     AdminRegisterRequest,
     DoctorRegisterRequest,
-    UpsertAvailabilityRequest,
+    UpsertDoctorAvailabilityRequest,
+    doctor_all_appointments,
+    doctor_get_appointment_details,
     list_doctors,
     register_admin,
     register_doctor,
     update_doctor_profile,
-    upsert_availability,
+    upsert_doctor_availability,
 )
 from backend.app.api.routes.documents import create_document, list_documents
 from backend.app.api.routes.medical_records import (
@@ -41,7 +50,7 @@ from backend.app.api.routes.medical_records import (
     get_medical_record_by_appointment,
 )
 from backend.app.api.routes.prescriptions import CreatePrescriptionRequest, create_prescription, get_prescription
-from backend.app.api.routes.support import support_search_doctors
+from backend.app.api.routes.support import support_list_appointments, support_search_doctors
 from backend.app.api.routes.tenants import get_tenant
 from backend.app.core import rate_limit, storage, timeutils
 from backend.app.main import app
@@ -98,6 +107,13 @@ class HardeningTests(unittest.IsolatedAsyncioTestCase):
         conn = await self.db.connect()
         try:
             return await conn.fetchval(sql, *args)
+        finally:
+            await conn.close()
+
+    async def fetchrow(self, sql: str, *args):
+        conn = await self.db.connect()
+        try:
+            return await conn.fetchrow(sql, *args)
         finally:
             await conn.close()
 
@@ -258,13 +274,10 @@ class HardeningTests(unittest.IsolatedAsyncioTestCase):
 
     # --- S8: patients can't change their login email -------------------------------------------------
 
-    async def test_s8_patient_profile_patch_cannot_change_the_login_email(self):
-        endpoint = next(r.endpoint for r in patient_routes.router.routes if r.path == "/patient/profile" and "PATCH" in r.methods)
-        payload = patient_routes.UpdateProfileRequest.model_validate(
-            {"full_name": "Patient One", "phone": "555-010-2030", "email": "admin@example.test"}
-        )
+    async def test_s8_patient_profile_update_cannot_change_the_login_email(self):
+        payload = {"fullName": "Patient One", "phone": "555-010-2030", "email": "admin@example.test"}
         async with self.sessions() as s:
-            await endpoint(payload=payload, identity=self.identity("patient1", "PATIENT"), db=s)
+            await patient_routes.update_patient_profile(payload=payload, identity=self.identity("patient1", "PATIENT"), db=s)
         self.assertEqual(await self.fetchval("SELECT email FROM users WHERE id = $1", self.ids["patient1_user"]), "patient1@example.test")
         self.assertEqual(await self.fetchval("SELECT full_name FROM patients WHERE id = $1", self.ids["patient1"]), "Patient One")
 
@@ -280,21 +293,21 @@ class HardeningTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn((path, "POST"), routes)
         self.assertNotIn(("/api/tenants/debug", "GET"), routes)
 
-    # --- S11 + S15: legacy availability endpoint ------------------------------------------------------
+    # --- S11 + S15: availability endpoint -------------------------------------------------------------
 
-    async def test_s11_legacy_availability_endpoint_enforces_the_change_window_and_audits(self):
+    async def test_s11_availability_endpoint_enforces_the_change_window_and_audits(self):
         doctor = self.identity("doctor", "DOCTOR")
         past = (datetime.now(UTC) - timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
         far = (datetime.now(UTC) + timedelta(days=45)).replace(minute=0, second=0, microsecond=0)
         for when in (past, far):
             async with self.sessions() as s:
-                await self.expect_status(400, upsert_availability(
-                    doctor_id=self.ids["doctor"], payload=UpsertAvailabilityRequest(slot_time=when.isoformat(), is_available=False), identity=doctor, db=s,
+                await self.expect_status(400, upsert_doctor_availability(
+                    payload=UpsertDoctorAvailabilityRequest(slot=when.isoformat(), is_available=False), identity=doctor, db=s,
                 ))
         soon = local(timeutils.clinic_today(NY) + timedelta(days=3), 9)
         async with self.sessions() as s:
-            await upsert_availability(
-                doctor_id=self.ids["doctor"], payload=UpsertAvailabilityRequest(slot_time=soon.isoformat(), is_available=False), identity=doctor, db=s,
+            await upsert_doctor_availability(
+                payload=UpsertDoctorAvailabilityRequest(slot=soon.isoformat(), is_available=False), identity=doctor, db=s,
             )
         self.assertGreaterEqual(await self.fetchval(
             "SELECT count(*) FROM audit_logs WHERE table_name = 'doctor_availability' AND performed_by = $1 AND action_type IN ('INSERT', 'UPDATE')",
@@ -378,6 +391,164 @@ class HardeningTests(unittest.IsolatedAsyncioTestCase):
         async with self.sessions() as s:
             error = await self.expect_status(404, create_appointment(payload=payload, identity=self.identity("patient1", "PATIENT"), db=s))
         self.assertEqual(error.detail, "Doctor not found.")
+
+    # --- GAP-04: admin-created users are audited ----------------------------------------------------
+
+    async def test_gap04_admin_created_users_get_an_audit_row_naming_the_admin(self):
+        body = {"role": "PATIENT", "full_name": "Pat New", "email": "pat.new@example.test", "password": "Secret123",
+                "phone": "555-123-4567", "gender": "Female", "date_of_birth": "1990-05-01"}
+        async with self.sessions() as s:
+            created = await admin_create_user(request=SimpleNamespace(json=AsyncMock(return_value=body)), identity=self.identity("admin", "ADMIN"), db=s)
+        row = await self.fetchrow(
+            "SELECT action_type, performed_by, new_data->>'email' AS email, new_data->>'role' AS role FROM audit_logs "
+            "WHERE table_name = 'users' AND record_id = $1 AND performed_by = $2",
+            created["id"], self.ids["admin_user"],
+        )
+        self.assertEqual((row["action_type"], row["email"], row["role"]), ("INSERT", "pat.new@example.test", "PATIENT"))
+        # GAP-07: the gender is stored as the enum value whatever case the form sent
+        self.assertEqual(await self.fetchval("SELECT gender FROM patients WHERE user_id = $1", created["id"]), "FEMALE")
+
+    # --- GAP-05: soft delete records who deleted the login --------------------------------------------
+
+    async def test_gap05_soft_delete_sets_deleted_by_on_the_user(self):
+        async with self.sessions() as s:
+            await soft_delete_user(user_id=self.ids["patient2_user"], identity=self.identity("admin", "ADMIN"), db=s)
+        row = await self.fetchrow("SELECT deleted_at, deleted_by, is_active FROM users WHERE id = $1", self.ids["patient2_user"])
+        self.assertIsNotNone(row["deleted_at"])
+        self.assertEqual(str(row["deleted_by"]), self.ids["admin_user"])
+        self.assertFalse(row["is_active"])
+
+    # --- GAP-15: patient profile is validated and optional fields can be cleared -----------------------
+
+    async def test_gap15_patient_profile_clears_optional_fields_and_rejects_bad_values(self):
+        me = self.identity("patient1", "PATIENT")
+        async with self.sessions() as s:
+            await patient_routes.update_patient_profile(payload={"city": "Austin", "insuranceProvider": "Acme", "gender": "male"}, identity=me, db=s)
+        self.assertEqual(
+            tuple(await self.fetchrow("SELECT city, insurance_provider, gender FROM patients WHERE id = $1", self.ids["patient1"])),
+            ("Austin", "Acme", "MALE"),
+        )
+        async with self.sessions() as s:  # an empty value clears it; an empty name or phone keeps the stored one
+            await patient_routes.update_patient_profile(payload={"city": "", "insuranceProvider": "  ", "fullName": "", "phone": ""}, identity=me, db=s)
+        row = await self.fetchrow("SELECT city, insurance_provider, full_name FROM patients WHERE id = $1", self.ids["patient1"])
+        self.assertEqual((row["city"], row["insurance_provider"], row["full_name"]), (None, None, "Patient 1"))
+
+        for bad in ({"phone": "12345"}, {"fullName": "Al"}, {"gender": "unknown"}, {"dateOfBirth": "2999-01-01"}, {"city": "x" * 101}):
+            async with self.sessions() as s:
+                await self.expect_status(422, patient_routes.update_patient_profile(payload=bad, identity=me, db=s))
+        self.assertEqual(await self.fetchval("SELECT full_name FROM patients WHERE id = $1", self.ids["patient1"]), "Patient 1")
+
+    # --- GAP-16: doctor profile is validated and trimmed -----------------------------------------------
+
+    async def test_gap16_doctor_profile_is_validated_and_trimmed(self):
+        doctor = self.identity("doctor", "DOCTOR")
+        async with self.sessions() as s:
+            await update_doctor_profile(payload={"fullName": "  Dr Test Renamed ", "phone": "555-123-4567", "specialty": " Cardiology "}, identity=doctor, db=s)
+        row = await self.fetchrow("SELECT full_name, phone, specialty FROM doctors WHERE id = $1", self.ids["doctor"])
+        self.assertEqual(tuple(row), ("Dr Test Renamed", "555-123-4567", "Cardiology"))
+        for bad in ({"phone": "123"}, {"fullName": "Dr"}, {"licenseNumber": "L" * 101}):
+            async with self.sessions() as s:
+                await self.expect_status(422, update_doctor_profile(payload=bad, identity=doctor, db=s))
+
+    # --- GAP-17: bad audit-log date filters ----------------------------------------------------------------
+
+    async def test_gap17_bad_audit_log_dates_are_a_422(self):
+        async with self.sessions() as s:
+            error = await self.expect_status(422, list_audit_logs(table="", date_from="yesterday", date_to="", identity=self.identity("admin", "ADMIN"), db=s))
+        self.assertEqual(error.detail, "Invalid datetime format.")
+
+    # --- GAP-18: support lists leave out deleted doctors ------------------------------------------------
+
+    async def test_gap18_support_appointment_list_leaves_out_deleted_doctors(self):
+        kept = await self.book("patient1", 9)
+        dropped = await self.book("patient1", 10, doctor="doctor2")
+        await self.fetchval("UPDATE doctors SET deleted_at = now() WHERE id = $1 RETURNING id", self.ids["doctor2"])
+        staff = SimpleNamespace(user_id=self.ids["admin_user"], tenant_id=self.ids["tenant"], role="SUPPORT_STAFF", clinic_tz=NY)
+        async with self.sessions() as s:
+            ids = [r["id"] for r in await support_list_appointments(patient_id=self.ids["patient1"], doctor_id=None, identity=staff, db=s)]
+        self.assertIn(kept, ids)
+        self.assertNotIn(dropped, ids)
+
+    # --- GAP-24: appointment ids must be UUIDs -------------------------------------------------------------
+
+    async def test_gap24_non_uuid_appointment_ids_are_refused_before_the_database(self):
+        doctor = self.identity("doctor", "DOCTOR")
+        for bad in ("all", "x" * 36, "12345678-1234-1234-1234-12345678901z"):
+            async with self.sessions() as s:
+                error = await self.expect_status(400, doctor_get_appointment_details(appointment_id=bad, identity=doctor, db=s))
+            self.assertEqual(error.detail, "Invalid appointment ID")
+        appointment_id = await self.book("patient1", 11)
+        async with self.sessions() as s:
+            details = await doctor_get_appointment_details(appointment_id=appointment_id, identity=doctor, db=s)
+        self.assertEqual(details["id"], appointment_id)
+
+    # --- GAP-13: cancelled appointments can be listed ------------------------------------------------------
+
+    async def test_gap13_cancelled_appointments_are_listed_on_request(self):
+        kept = await self.book("patient1", 12)
+        cancelled = await self.book("patient1", 13)
+        async with self.sessions() as s:
+            await delete_appointment(appointment_id=cancelled, identity=self.identity("patient1", "PATIENT"), db=s)
+        patient = self.identity("patient1", "PATIENT")
+        async with self.sessions() as s:
+            default = {a["id"]: a["status"] for a in await list_all_appointments(include_cancelled=False, identity=patient, db=s)}
+            with_cancelled = {a["id"]: a["status"] for a in await list_all_appointments(include_cancelled=True, identity=patient, db=s)}
+        self.assertEqual(default, {kept: "SCHEDULED"})
+        self.assertEqual(with_cancelled, {kept: "SCHEDULED", cancelled: "CANCELLED"})
+
+        # The doctor's week shows it too, and other patients' lists never do
+        week_day = timeutils.clinic_today(NY) + timedelta(days=2)
+        async with self.sessions() as s:
+            week = {a["id"]: a["status"] for a in await doctor_all_appointments(
+                from_date=week_day, include_cancelled=True, identity=self.identity("doctor", "DOCTOR"), db=s,
+            )}
+            other = await list_all_appointments(include_cancelled=True, identity=self.identity("patient2", "PATIENT"), db=s)
+        self.assertEqual(week.get(cancelled), "CANCELLED")
+        self.assertEqual(other, [])
+
+    # --- GAP-25: rate limits are shared by every instance ----------------------------------------------------
+
+    async def test_gap25_failed_logins_are_counted_in_the_database(self):
+        async def fail() -> int:
+            async with self.sessions() as s:
+                with self.assertRaises(HTTPException) as ctx:
+                    await login(request=LoginRequest(email="Patient1@Example.test", password="wrong-password"), http_request=FAKE_HTTP, db=s)
+            return ctx.exception.status_code
+
+        for attempt in range(10):
+            self.assertEqual(await fail(), 401, attempt)
+            rate_limit.reset_all()  # a different Lambda instance each time: no in-process memory to rely on
+        self.assertEqual(await fail(), 429)
+
+        # Only hashes are stored, never the email or address itself
+        stored = await self.fetchval("SELECT string_agg(key_hash, ',') FROM rate_limit_events WHERE limit_name = 'login-email'")
+        self.assertNotIn("patient1", stored)
+        self.assertEqual(len(stored.split(",")[0]), 64)
+
+        # Old rows are cleaned up as new events are recorded
+        await self.fetchval("UPDATE rate_limit_events SET created_at = now() - interval '2 hours' RETURNING 1")
+        async with self.sessions() as s:
+            await rate_limit.record(s, "register-ip", "203.0.113.50")
+        self.assertEqual(await self.fetchval("SELECT count(*) FROM rate_limit_events WHERE created_at < now() - interval '1 hour'"), 0)
+
+    async def test_gap25_reset_requests_are_limited_across_instances(self):
+        from backend.app.api.routes.auth import ForgotPasswordRequest, forgot_password
+
+        for _ in range(5):
+            rate_limit.reset_all()
+            async with self.sessions() as s:
+                await forgot_password(request=ForgotPasswordRequest(email="nobody@example.test"), http_request=FAKE_HTTP, db=s)
+        async with self.sessions() as s:
+            await self.expect_status(429, forgot_password(request=ForgotPasswordRequest(email="nobody@example.test"), http_request=FAKE_HTTP, db=s))
+
+    # --- Migration 009: gender values -----------------------------------------------------------------------
+
+    async def test_migration_009_stores_gender_as_the_enum_value(self):
+        await self.fetchval("UPDATE patients SET gender = 'Male' WHERE id = $1 RETURNING 1", self.ids["patient1"])
+        await self.fetchval("UPDATE patients SET gender = 'prefer not to say' WHERE id = $1 RETURNING 1", self.ids["patient2"])
+        await self.db.run_migration("009_rate_limits_and_gender_values.sql")  # idempotent: safe to run again
+        self.assertEqual(await self.fetchval("SELECT gender FROM patients WHERE id = $1", self.ids["patient1"]), "MALE")
+        self.assertEqual(await self.fetchval("SELECT gender FROM patients WHERE id = $1", self.ids["patient2"]), "PREFER_NOT_TO_SAY")
 
 
 if __name__ == "__main__":

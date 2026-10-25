@@ -230,6 +230,15 @@ CREATE TABLE audit_logs (                                  -- append-only
     performed_by uuid REFERENCES users(id),
     performed_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE rate_limit_events (                           -- migration 009; no tenant_id, no RLS
+    id          uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+    limit_name  varchar(32) NOT NULL,                      -- login-email, login-ip, reset-email, reset-ip, register-ip
+    key_hash    char(64) NOT NULL,                         -- SHA-256 of the lower-cased email or client address
+    created_at  timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_rate_limit_events_key ON rate_limit_events (limit_name, key_hash, created_at);
+CREATE INDEX idx_rate_limit_events_created ON rate_limit_events (created_at);
 ```
 
 ## 5. Triggers
@@ -358,6 +367,7 @@ The app connects as `healthcare_user` (DML only). Migrations run as the owner.
 | `006_grant_app_user_access.sql` | Grants and default privileges (§7) | |
 | `007_row_level_security.sql` | RLS policies + the cross-tenant functions (§6) | Requires 003, 005 |
 | `008_add_tenant_timezone.sql` | `tenants.timezone varchar(64) NOT NULL DEFAULT <migration.clinic_timezone or America/New_York>`; validates the zone with `now() AT TIME ZONE v_zone` first | Apply before the backend that reads it |
+| `009_rate_limits_and_gender_values.sql` (+ `_rollback`) | Create `rate_limit_events` (shared rate-limit counters, F04 §5) with grants to the app user; rewrite `patients.gender` values like "Male" / "prefer not to say" to the enum values | Either deploy order; without it the backend counts in memory |
 
 - **DATA-MIG-01** Migrations are numbered `NNN_description.sql`, idempotent (`IF NOT EXISTS`, guarded `DO`
   blocks), wrapped in `BEGIN … COMMIT`, and run with `psql -v ON_ERROR_STOP=1`.

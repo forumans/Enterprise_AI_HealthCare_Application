@@ -36,6 +36,13 @@ describe("LoginPage for support staff", () => {
     expect(screen.getByRole("link", { name: "Forgot password?" })).toHaveAttribute("href", "/forgot-password");
   });
 
+  it("leaves the password length to the server (an older account may have a shorter password)", async () => {
+    const handleLogin = renderLogin("DOCTOR", { email: "old@clinic.com", password: "short" });
+    await userEvent.click(screen.getByRole("button", { name: "Login as Doctor" }));
+    expect(handleLogin).toHaveBeenCalledWith("DOCTOR");
+    expect(vi.mocked(useAuthContext).mock.results[0].value.setStatus).not.toHaveBeenCalledWith(expect.stringMatching(/at least 8/));
+  });
+
   it("logs in with the SUPPORT_STAFF role", async () => {
     const handleLogin = renderLogin("SUPPORT_STAFF", { email: "sam@clinic.com", password: "Password123" });
     await userEvent.click(screen.getByRole("button", { name: "Login as Support Staff" }));

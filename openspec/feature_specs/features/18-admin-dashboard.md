@@ -13,8 +13,8 @@ recently created users.
 
 `h2` "System Dashboard".
 
-1. **Administrator** card (`h3`): "Name" (the signed-in admin's name; reference shows `session.userName` or
-   "System Administrator" — GAP-14), "Role" = "Administrator", "Tenant Name" = clinic name from
+1. **Administrator** card (`h3`): "Name" (the signed-in admin's name, `session.userName` from login; "System
+   Administrator" if the admin has no profile name), "Role" = "Administrator", "Tenant Name" = clinic name from
    `GET /tenants/current` (fallback: tenant id, then "-").
 2. While loading: card "Loading dashboard data...". Data loaded in parallel: `GET /admin/users` (page 1, 25),
    `GET /admin/reports`, `GET /admin/appointment-metrics`.
@@ -35,7 +35,7 @@ recently created users.
    "Register New Doctor" → `/admin/register-doctor`, "Register New Patient" → `/admin/register-patient`,
    "Register New Admin" → `/admin/register-admin`.
 5. **Recent Users (<N>)** card (only when users exist): the first 10 rows of `GET /admin/users` — Name, Email, Role,
-   Status pill "Active" / "Inactive" from `is_active` (GAP-14).
+   Status pill "Active" (teal) / "Inactive" (pink) from `is_active`.
 
 ## 3. Rules
 

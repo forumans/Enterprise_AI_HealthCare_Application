@@ -6,6 +6,7 @@ patient and doctor cancellation, the clinic-local "today"/week views, and backfi
 """
 
 import asyncio
+import uuid
 import unittest
 from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
@@ -19,12 +20,10 @@ from sqlalchemy.pool import NullPool
 
 from backend.app.api.routes.admin import admin_create_user, admin_list_users, soft_delete_user
 from backend.app.api.routes.admin_password_reset import (
-    ChangeEmailRequest,
     NewEmailRequest,
     NewPasswordRequest,
     activate_user,
     change_email_by_id,
-    change_user_email,
     deactivate_user,
     reset_password_by_id,
     search_users,
@@ -42,12 +41,10 @@ from backend.app.api.routes.appointments import (
 )
 from backend.app.api.routes.doctor import (
     DeleteAvailabilityRequest,
-    UpsertAvailabilityRequest,
     UpsertDoctorAvailabilityRequest,
     doctor_all_appointments,
     doctor_appointments_today,
     delete_availability,
-    upsert_availability,
     upsert_doctor_availability,
 )
 from backend.app.api.routes.auth import LoginRequest, login
@@ -663,27 +660,27 @@ class CoreFlowTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await conn.close()
 
-        async def change(email: str, role: str, new_email: str) -> dict:
+        async def change(user_id: str, new_email: str) -> dict:
             async with self.sessions() as s:
-                return await change_user_email(
-                    request=ChangeEmailRequest(email=email, role=role, new_email=new_email), identity=self.identity("admin", "ADMIN"), db=s
+                return await change_email_by_id(
+                    user_id=user_id, request=NewEmailRequest(new_email=new_email), identity=self.identity("admin", "ADMIN"), db=s
                 )
 
-        result = await change("patient1@example.test", "PATIENT", "  Patient.One@NEW.example.test ")
+        result = await change(self.ids["patient1_user"], "  Patient.One@NEW.example.test ")
         self.assertEqual((result["old_email"], result["new_email"]), ("patient1@example.test", "patient.one@new.example.test"))
-        await change("sam@example.test", "SUPPORT_STAFF", "freed@example.test")
+        await change(self.ids["staff_user"], "freed@example.test")
 
         cases = [
-            ("patient2@example.test", "PATIENT", "patient2@example.test", 400),  # unchanged
-            ("patient2@example.test", "DOCTOR", "p2@example.test", 404),  # wrong role
-            ("patient2@example.test", "PATIENT", "doc@example.test", 409),  # taken in this clinic
-            ("patient2@example.test", "PATIENT", "elsewhere@example.test", 409),  # active in another clinic
-            ("patient2@example.test", "PATIENT", "oldstaff@example.test", 409),  # deleted, but same clinic
+            (self.ids["patient2_user"], "patient2@example.test", 400),  # unchanged
+            (str(uuid.uuid4()), "p2@example.test", 404),  # no such user
+            (self.ids["patient2_user"], "doc@example.test", 409),  # taken in this clinic
+            (self.ids["patient2_user"], "elsewhere@example.test", 409),  # active in another clinic
+            (self.ids["patient2_user"], "oldstaff@example.test", 409),  # deleted, but same clinic
         ]
-        for email, role, new_email, expected in cases:
+        for user_id, new_email, expected in cases:
             with self.subTest(new_email=new_email, expected=expected):
                 with self.assertRaises(HTTPException) as ctx:
-                    await change(email, role, new_email)
+                    await change(user_id, new_email)
                 self.assertEqual(ctx.exception.status_code, expected)
 
         conn = await self.db.connect()
@@ -1057,7 +1054,7 @@ class CoreFlowTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(ctx.exception.status_code, expected)
         self.assertEqual(await self._slot_status(self.ids["doctor"], slot), "AVAILABLE")
 
-    async def test_slot_changes_by_path_respect_doctor_ownership_and_bookings(self):
+    async def test_slot_changes_naming_a_doctor_respect_ownership_and_bookings(self):
         async with self.sessions() as s:
             await ensure_default_slots(s, await self.doctor(s), NY)
         other_doctor = await self._second_doctor()
@@ -1066,9 +1063,9 @@ class CoreFlowTests(unittest.IsolatedAsyncioTestCase):
         await self._book("patient1", booked)
 
         async def change(doctor_id: str, identity, when: datetime):
-            payload = UpsertAvailabilityRequest(slot_time=when.isoformat(), is_available=False)
+            payload = UpsertDoctorAvailabilityRequest(slot=when.isoformat(), is_available=False, doctor_id=doctor_id)
             async with self.sessions() as s:
-                return await upsert_availability(doctor_id=doctor_id, payload=payload, identity=identity, db=s)
+                return await upsert_doctor_availability(payload=payload, identity=identity, db=s)
 
         cases = [
             (other_doctor, self.identity("doctor", "DOCTOR"), local(day, 17), 403),  # another doctor's slots

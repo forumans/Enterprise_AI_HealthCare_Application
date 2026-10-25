@@ -1,8 +1,7 @@
 # Feature 14 — Doctor: Search Patients and Clinical History
 
 **Roles:** D (screen), A (API) · **Route:** `/doctors/search-patients` ·
-**API:** `GET /patients/search?q=`, `GET /patient/prescriptions-full?patient_id=`, `GET /patients/{id}/prescriptions`,
-`GET /patients` · **Depends on:** 13, 15 · **Traces to:** `DOC-SRCH-*`, `SEC-AUD-03`
+**API:** `GET /patients/search?q=`, `GET /patient/prescriptions-full?patient_id=` · **Depends on:** 13, 15 · **Traces to:** `DOC-SRCH-*`, `SEC-AUD-03`
 
 ## 1. Purpose
 
@@ -43,13 +42,7 @@ Every view of clinical data is recorded in the audit trail.
   state, postal, country), symptoms, diagnosis, lab_results, medication, prescription_date (appointment time|"")}`.
 - Writes one `READ` access event per distinct patient returned.
 
-### `GET /patients/{patient_id}/prescriptions` — D (API only)
-Same joins for one patient, ordered by appointment time desc, plus `doctor_name = "<doctor full_name> <specialty>"`
-trimmed ("Unknown" when no doctor). Access-logged when rows exist.
-
-### `GET /patients` — D, S, A (API only; avoid on large tenants)
-Non-deleted patients of the tenant `[{id, user_id, name, phone}]`. The support Doctor Appointments screen SHALL NOT
-call it ([16](16-support-appointments.md)).
+There is no endpoint listing every patient: people are found through searches (`*` lists everyone).
 
 ## 4. Rules
 

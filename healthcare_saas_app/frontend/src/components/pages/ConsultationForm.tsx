@@ -82,8 +82,17 @@ export function ConsultationForm({ session, appointmentId }: ConsultationFormPro
   const handleSubmitConsultation = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!consultationState.symptoms || !consultationState.diagnosis) {
+    if (!consultationState.symptoms.trim() || !consultationState.diagnosis.trim()) {
       setError("Please fill in at least symptoms and diagnosis fields");
+      return;
+    }
+    // Same minimums as the server, so a short entry gets a clear message instead of a failed save
+    if (consultationState.symptoms.trim().length < 5) {
+      setError("Symptoms must be at least 5 characters.");
+      return;
+    }
+    if (consultationState.diagnosis.trim().length < 3) {
+      setError("Diagnosis must be at least 3 characters.");
       return;
     }
 

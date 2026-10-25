@@ -63,6 +63,20 @@ class AuthLoginTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["tenant_id"], "tenant-1")
         self.assertIsNone(payload["user_name"])
 
+    async def test_login_returns_the_profile_name_for_every_role(self):
+        # GAP-14: not only patients; the admin dashboard shows the signed-in admin's name
+        request = LoginRequest(email="admin@example.com", password="Admin123!", remember_me=False)
+        user = AccountRef(id="user-1", tenant_id="tenant-1", role="ADMIN", password_hash="hashed-password")
+        db = _FakeDbSession(user="Ada Admin")  # every query in this fake returns this value
+
+        with _lookup(user), patch("backend.app.api.routes.auth.verify_password", return_value=True), patch(
+            "backend.app.api.routes.auth.create_access_token", return_value="token-123"
+        ):
+            payload = await login(request=request, http_request=_http(), db=db)
+
+        self.assertEqual(payload["user_name"], "Ada Admin")
+        self.assertIsNone(payload["insurance_provider"])
+
 
 class LoginRateLimitTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):

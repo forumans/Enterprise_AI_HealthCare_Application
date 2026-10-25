@@ -10,7 +10,7 @@ import unittest
 
 from fastapi import HTTPException
 
-from backend.app.api.routes.admin_password_reset import ChangeEmailRequest, get_available_roles
+from backend.app.api.routes.admin_password_reset import NewEmailRequest, get_available_roles
 from backend.app.main import app
 from backend.app.middleware.tenant_middleware import _as_role
 from backend.app.models import User
@@ -35,11 +35,8 @@ class RoleAccessTests(unittest.TestCase):
         self.assertEqual(_allowed_roles("/api/support/doctors", "GET"), {"SUPPORT_STAFF"})
         self.assertEqual(_allowed_roles("/api/support/profile", "GET"), {"SUPPORT_STAFF"})
         self.assertEqual(_allowed_roles("/api/support/profile", "PUT"), {"SUPPORT_STAFF"})
-        self.assertIn("SUPPORT_STAFF", _allowed_roles("/api/patients", "GET"))
 
     def test_only_admins_change_passwords_and_emails(self):
-        self.assertEqual(_allowed_roles("/api/admin/reset-password", "POST"), {"ADMIN"})
-        self.assertEqual(_allowed_roles("/api/admin/change-email", "POST"), {"ADMIN"})
         self.assertEqual(_allowed_roles("/api/admin/users/search", "GET"), {"ADMIN"})
         self.assertEqual(_allowed_roles("/api/admin/users/{user_id}/reset-password", "POST"), {"ADMIN"})
         self.assertEqual(_allowed_roles("/api/admin/users/{user_id}/change-email", "POST"), {"ADMIN"})
@@ -47,10 +44,9 @@ class RoleAccessTests(unittest.TestCase):
         self.assertEqual(_allowed_roles("/api/admin/users/{user_id}/activate", "POST"), {"ADMIN"})
 
     def test_change_email_request_normalizes_and_validates(self):
-        request = ChangeEmailRequest(email=" A@Example.com ", role="PATIENT", new_email="New.Person@Example.ORG")
-        self.assertEqual((request.email, request.new_email), ("a@example.com", "new.person@example.org"))
+        self.assertEqual(NewEmailRequest(new_email=" New.Person@Example.ORG ").new_email, "new.person@example.org")
         with self.assertRaises(ValueError):
-            ChangeEmailRequest(email="a@example.com", role="PATIENT", new_email="not-an-email")
+            NewEmailRequest(new_email="not-an-email")
 
     def test_confirming_stays_doctor_only(self):
         self.assertEqual(_allowed_roles("/api/appointments/{appointment_id}/confirm", "POST"), {"DOCTOR"})

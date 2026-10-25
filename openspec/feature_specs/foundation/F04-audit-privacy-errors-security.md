@@ -22,8 +22,7 @@ table_name, record_id)` writes `action_type="READ"`, `new_data={"viewer_role": <
 | Patient self-registration | users | INSERT | user | `{email, role}` |
 | Doctor self-registration | users | INSERT | user | `{role:"DOCTOR", is_active:false, via:"self_registration"}` |
 | First-admin bootstrap | users | INSERT | user | `{role:"ADMIN", via:"bootstrap"}` |
-| Admin creates user | users | INSERT | user | `{email, role, created_by_admin:true}` (see GAP-04) |
-| Attach profile (legacy) | patients / doctors | INSERT | profile | `{user_id, full_name}` |
+| Admin creates user | users | INSERT | user | `{email, role, created_by_admin:true}` (performed_by = the admin) |
 | Forgot password (account exists) | users | UPDATE | user | `{password_reset_requested:true}` (performed_by = that user) |
 | Reset via email link | users | UPDATE | user | `{password_reset:true, via:"email_link"}` |
 | Admin reset password | users | UPDATE | user | `{password_reset:true}` |
@@ -55,7 +54,7 @@ table_name, record_id)` writes `action_type="READ"`, `new_data={"viewer_role": <
 | **Roles** | A |
 | **Filters** | `table` exact `table_name` (trimmed, optional); `date_from`, `date_to` ISO-8601 instants (inclusive, naive = UTC) |
 | **Result** | Tenant's newest 200 rows, `performed_at DESC`: `[{action, timestamp (ISO), performed_by (uuid or ""), table, old ({} if null), new ({} if null)}]` |
-| **Errors** | 403 non-admin; unparseable dates surface as 500 today (see GAP-17) — SHOULD be 422 "Invalid datetime format." |
+| **Errors** | 403 non-admin; unparseable `date_from`/`date_to` → 422 "Invalid datetime format." |
 
 There is no endpoint to modify or delete audit rows. There is no audit screen yet.
 
@@ -99,19 +98,20 @@ Successful creates return 201; other successes 200. Ids are UUID strings. Timest
 ### 3.2 Field validation catalog (`VAL`)
 
 The same rule applies wherever the field appears. "UI" is the browser check, "API" the server check; both SHALL
-enforce the rule (where the current code skips the API check, see GAP-06, GAP-15, GAP-16). Feature files repeat
-the rule next to each form.
+enforce the rule. The server checks live in one module (`backend/app/api/validators.py`: `valid_email`,
+`valid_phone`, `valid_gender`, `valid_birth_date`, `valid_doctor_birth_date`, `valid_full_name`, `optional_text`),
+used by registration, admin user creation and the profile endpoints. Feature files repeat the rule next to each form.
 
 | ID | Field | Rule | Message |
 |----|-------|------|---------|
 | VAL-01 | Full name | Required; UI 3–80 characters after trimming; API 3–255 | "Name must be at least 3 characters." |
 | VAL-02 | Email | UI `^[^\s@]+@[^\s@]+\.[^\s@]+$`; admin email change `^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`; stored lower-cased and trimmed | "Please provide a valid email address." (login, forgot password, admin email change: "Please enter a valid email address") |
 | VAL-03 | Phone | `^\+?[0-9\-\s]{10,15}$` | "Phone should be 10-15 digits." |
-| VAL-04 | New password | At least 8 characters (API max 255) | "Password must be at least 8 characters long" (login page: "Password must be at least 8 characters.") |
+| VAL-04 | New password | At least 8 characters (API max 255) | "Password must be at least 8 characters long" (the login page doesn't check the length; the server decides) |
 | VAL-05 | Password / email confirmation | Equal to the first entry | "The two passwords do not match." / "The two new <field> entries do not match" |
 | VAL-06 | Patient date of birth | Optional on self-registration and profile, required when an admin registers a patient; not in the future; not more than 120 years ago | "Date of birth cannot be in the future." / "Date of birth cannot be more than 120 years ago." (admin forms: "Date of birth is required." / "Please enter a valid date of birth.") |
 | VAL-07 | Doctor date of birth | Required; at least 18 years old today | "Date of birth is required." / "Doctor must be at least 18 years old. Current age: N" |
-| VAL-08 | Gender | One of `MALE`, `FEMALE`, `OTHER`, `PREFER_NOT_TO_SAY`; optional except when an admin registers a patient | "Gender is required." |
+| VAL-08 | Gender | One of `MALE`, `FEMALE`, `OTHER`, `PREFER_NOT_TO_SAY`; the API accepts any case (and spaces for underscores) and stores the enum value; optional except when an admin registers a patient | "Gender is required." |
 | VAL-09 | Appointment reason | Required; at least 5 characters after trimming | "Please provide a reason of at least 5 characters." (patient screen, empty: "Please provide a reason for the appointment."; edit: "Reason must be at least 5 characters.") |
 | VAL-10 | Diagnosis | Required; at least 3 characters | "Please fill in at least symptoms and diagnosis fields" |
 | VAL-11 | Symptoms | Required; at least 5 characters | same as VAL-10 |
@@ -148,7 +148,12 @@ With Starlette `add_middleware`, the last added is outermost: add them in revers
 
 ## 5. Rate limiting of public endpoints (`AUTH-RATE`)
 
-In-memory sliding window per process (thread-safe lock; key lower-cased).
+Sliding windows counted in PostgreSQL (table `rate_limit_events`, migration 009), so all Lambda instances share
+the counts and the limits hold globally. Keys (lower-cased email or client address) are stored only as SHA-256
+hashes. Each recorded event is committed immediately, so it counts even when the request then fails (a wrong
+password's 401 rolls the request back). Rows older than the longest window (1 hour) are deleted as new events are
+recorded. Until migration 009 is applied (or without a database, as in unit tests) the same limits are counted in
+memory per process.
 
 | Limit name | Max events | Window | Counts | Used by |
 |------------|-----------:|--------|--------|---------|
@@ -163,7 +168,8 @@ In-memory sliding window per process (thread-safe lock; key lower-cased).
 - Over the limit → 429 `{"detail": "Too many attempts. Please wait a few minutes and try again."}` with
   `Retry-After: <seconds until the oldest event leaves the window, +1>`.
 - Client address = first `X-Forwarded-For` hop, else the socket peer, else "unknown".
-- Counters are per instance; production SHOULD add an AWS WAF rate-based rule on CloudFront.
+- An AWS WAF rate-based rule on CloudFront MAY be added on top (per-IP flood protection before requests reach
+  the app); it isn't needed for these limits.
 
 ## 6. Secrets and configuration (`SEC-SECRETS`)
 

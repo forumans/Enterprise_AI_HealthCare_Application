@@ -74,6 +74,7 @@ class TempDatabase:
             await self.run_migration("005_add_support_staff_role.sql")
             await self.run_migration("007_row_level_security.sql")
             await self.run_migration("008_add_tenant_timezone.sql")
+            await self.run_migration("009_rate_limits_and_gender_values.sql")
         return self
 
     @property

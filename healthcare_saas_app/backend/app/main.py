@@ -210,6 +210,8 @@ def create_app() -> FastAPI:
     # Keep legacy unprefixed routes for backward compatibility.
     app.include_router(api_router)
     app.include_router(health_router, prefix="/api")
+    # /health unprefixed too, for direct calls (it is listed as a public path above)
+    app.include_router(health_router)
 
     return app
 

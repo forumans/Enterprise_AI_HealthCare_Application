@@ -1,7 +1,7 @@
 # Feature 17 — Update Profile (Patient, Doctor, Support Staff)
 
 **Roles:** P, D, S (own profile only) · **Routes:** `/patients/profile`, `/doctors/profile`, `/support/profile` ·
-**API:** `GET/PUT /patient/patient/profile`, `PATCH /patient/profile`, `GET/PUT /doctor/profile`,
+**API:** `GET/PUT /patient/patient/profile`, `GET/PUT /doctor/profile`,
 `GET/PUT /support/profile` · **Depends on:** F03, F04 · **Traces to:** `PAT-PROF-*`, `DOC-PROF-*`, `SUP-PROF-*`
 
 ## 1. Common rules
@@ -42,10 +42,10 @@ On failure: `alert("Failed to update profile. Please try again.")`.
 - `PUT /patient/patient/profile` — P; camelCase body, every key optional: `fullName`, `phone`, `dateOfBirth`
   (ISO date), `gender`, `addressLine1`, `addressLine2`, `city`, `state`, `postalCode`, `country`,
   `insuranceProvider`, `insurancePolicyNumber`. `fullName`/`phone`/`dateOfBirth` are applied only when non-empty;
-  the other keys are applied when present (an explicit empty string clears the field — the UI SHALL send `""` for
-  a cleared optional field, see GAP-15). Invalid date → 422 generic message. The server SHALL validate name length,
-  phone pattern, DOB range and gender enum (GAP-15). → `{"message": "Profile updated successfully"}`.
-- `PATCH /patient/profile` — P (API only): `{full_name (3..255), phone (pattern)}` → `{"message": "Profile updated"}`.
+  the other keys are applied when present, trimmed (an empty string clears the field; the UI always sends the
+  optional fields, `""` when cleared). The server validates name 3–255, phone pattern, DOB range, gender enum (any
+  case, stored upper-case) and the F02 length limits; any violation or a malformed date → 422 generic message and
+  nothing changes. → `{"message": "Profile updated successfully"}`.
 
 ## 3. Doctor profile (`/doctors/profile`)
 
@@ -63,8 +63,9 @@ Failure: server message.
   city/state/postal_code/country: null, insurance_provider: null, insurance_policy_id: null, deleted_at}`.
   (Email is in `users`; the extra null fields keep the shape stable.)
 - `PUT /doctor/profile` — D; body `{fullName?, phone?, specialty?, licenseNumber?}`; `fullName`/`phone` applied only
-  when non-empty, `specialty`/`licenseNumber` when present. Server SHALL validate name length and phone pattern
-  (GAP-16). → `{"message": "Profile updated successfully"}`. Audit on `doctors` with changed fields.
+  when non-empty, `specialty`/`licenseNumber` when present (empty clears them). Values are trimmed; name 3–255,
+  phone pattern, specialty ≤ 255, license ≤ 100, else 422 generic message. → `{"message": "Profile updated
+  successfully"}`. Audit on `doctors` with changed fields.
 
 ## 4. Support staff profile (`/support/profile`)
 

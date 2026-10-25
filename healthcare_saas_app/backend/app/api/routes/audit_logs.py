@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,10 +27,13 @@ async def list_audit_logs(
 
     if table.strip():
         conditions.append(AuditLog.table_name == table.strip())
-    if date_from.strip():
-        conditions.append(AuditLog.performed_at >= parse_client_datetime(date_from))
-    if date_to.strip():
-        conditions.append(AuditLog.performed_at <= parse_client_datetime(date_to))
+    try:
+        if date_from.strip():
+            conditions.append(AuditLog.performed_at >= parse_client_datetime(date_from))
+        if date_to.strip():
+            conditions.append(AuditLog.performed_at <= parse_client_datetime(date_to))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid datetime format.") from exc
 
     stmt = select(AuditLog).where(and_(*conditions)).order_by(AuditLog.performed_at.desc()).limit(200)
     rows = (await db.execute(stmt)).scalars().all()

@@ -186,15 +186,16 @@ export function PatientProfilePage({ auth, userData }: PatientProfilePageProps) 
         fullName: fullName.trim(),
         phone: phone.trim(),
         dateOfBirth: dateOfBirth || undefined,
-        gender: gender || undefined,
-        addressLine1: addressLine1.trim() || undefined,
-        addressLine2: addressLine2.trim() || undefined,
-        city: city.trim() || undefined,
-        state: state.trim() || undefined,
-        postalCode: postalCode.trim() || undefined,
-        country: country || undefined,
-        insuranceProvider: insuranceProvider.trim() || undefined,
-        insurancePolicyNumber: insurancePolicyNumber.trim() || undefined
+        // Optional fields are always sent: an empty value clears what was stored
+        gender,
+        addressLine1: addressLine1.trim(),
+        addressLine2: addressLine2.trim(),
+        city: city.trim(),
+        state: state.trim(),
+        postalCode: postalCode.trim(),
+        country,
+        insuranceProvider: insuranceProvider.trim(),
+        insurancePolicyNumber: insurancePolicyNumber.trim()
       };
       
       await api.updatePatientProfile(auth.session.accessToken, updatePayload);

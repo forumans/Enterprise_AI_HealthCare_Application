@@ -2,13 +2,12 @@
 or deactivate/activate their account.
 
 The Admin "Reset Password / Email" screen searches with GET /admin/users/search and then acts on
-the picked user's id. The older email-based endpoints (/admin/reset-password, /admin/change-email)
-share the same logic.
+the picked user's id.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, validator
 
@@ -30,26 +29,6 @@ def _normalized_email(v: str) -> str:
     if not re.match(EMAIL_PATTERN, v):
         raise ValueError('Invalid email format')
     return v.lower()
-
-
-class PasswordResetRequest(BaseModel):
-    email: str
-    role: str
-    new_password: str
-
-    @validator('email')
-    def validate_email(cls, v):
-        return _normalized_email(v)
-
-
-class ChangeEmailRequest(BaseModel):
-    email: str
-    role: str
-    new_email: str
-
-    @validator('email', 'new_email')
-    def validate_emails(cls, v):
-        return _normalized_email(v)
 
 
 class NewPasswordRequest(BaseModel):
@@ -75,7 +54,6 @@ RESETTABLE_ROLES = [
 ]
 
 
-
 def _require_valid_role(role: str) -> None:
     valid_roles = [value for value, _ in RESETTABLE_ROLES]
     if role not in valid_roles:
@@ -83,28 +61,6 @@ def _require_valid_role(role: str) -> None:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid role. Must be one of: {', '.join(valid_roles)}"
         )
-
-
-async def _user_by_email(db: AsyncSession, identity: CurrentIdentity, email: str, role: str) -> User:
-    _require_valid_role(role)
-    user = (
-        await db.execute(
-            select(User).where(
-                and_(
-                    User.email == email,
-                    User.role == role,
-                    User.tenant_id == identity.tenant_id,
-                    User.deleted_at.is_(None),
-                )
-            )
-        )
-    ).scalar_one_or_none()
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found with the provided email and role combination"
-        )
-    return user
 
 
 async def _user_by_id(db: AsyncSession, identity: CurrentIdentity, user_id: str) -> User:
@@ -313,45 +269,6 @@ async def change_email_by_id(
     user = await _user_by_id(db, identity, user_id)
     old_email = await _set_email(db, identity, user, request.new_email)
     return {"message": "Email changed successfully", "user_id": user.id, "old_email": old_email, "new_email": user.email, "user_role": user.role}
-
-
-@router.post("/reset-password")
-async def reset_user_password(
-    request: PasswordResetRequest,
-    identity: CurrentIdentity = Depends(require_roles("ADMIN")),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    """Reset password for a user by email and role"""
-
-    user = await _user_by_email(db, identity, request.email, request.role)
-    await _set_password(db, identity, user, request.new_password)
-    return {
-        "message": "Password reset successfully",
-        "user_email": request.email,
-        "user_role": request.role,
-        "reset_by": identity.user_id
-    }
-
-
-@router.post("/change-email")
-async def change_user_email(
-    request: ChangeEmailRequest,
-    identity: CurrentIdentity = Depends(require_roles("ADMIN")),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    """Change a user's login email, found by their current email and role."""
-
-    _require_valid_role(request.role)
-    if request.new_email == request.email:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The new email is the same as the current one.")
-    user = await _user_by_email(db, identity, request.email, request.role)
-    await _set_email(db, identity, user, request.new_email)
-    return {
-        "message": "Email changed successfully",
-        "old_email": request.email,
-        "new_email": request.new_email,
-        "user_role": request.role,
-    }
 
 
 @router.get("/roles")

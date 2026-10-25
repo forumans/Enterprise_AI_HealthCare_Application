@@ -8,7 +8,6 @@ import { DEFAULT_CLINIC_TIMEZONE, addDays, clinicToday, zonedTimeToDate } from "
 vi.mock("../../api", () => ({
   api: {
     listDoctors: vi.fn(),
-    listPatients: vi.fn(),
     supportSearchPatients: vi.fn(),
     supportSearchDoctors: vi.fn(),
     supportListAppointments: vi.fn(),
@@ -169,7 +168,6 @@ describe("SupportAppointmentsPage (doctor mode)", () => {
     vi.mocked(api.supportListAppointments).mockResolvedValue([upcoming]);
     vi.mocked(api.listAllDoctorAvailability).mockResolvedValue([{ slot_time: tomorrowAt(15).toISOString(), status: "AVAILABLE" }]);
     vi.mocked(api.bookAppointment).mockReset();
-    vi.mocked(api.listPatients).mockReset();
     vi.spyOn(window, "alert").mockImplementation(() => {});
   });
 
@@ -181,7 +179,6 @@ describe("SupportAppointmentsPage (doctor mode)", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Dr One" }));
     const heading = await screen.findByRole("heading", { name: /Upcoming Appointments for Dr One/ });
     await waitFor(() => expect(scrolled).toContain(heading.closest(".card")));
-    expect(api.listPatients).not.toHaveBeenCalled();
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
 
     // Patient search inside the booking card: email works as a search term

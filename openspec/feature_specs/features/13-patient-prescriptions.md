@@ -1,8 +1,7 @@
 # Feature 13 — Patient: Prescriptions and Medical History
 
 **Roles:** P (own data); D uses the same endpoint with `patient_id` ([14](14-doctor-search-patients.md)) ·
-**Route:** `/patients/prescriptions` · **API:** `GET /patient/me`, `GET /patient/prescriptions-full`,
-`GET /patient/medical-history`, `GET /patient/appointments/upcoming` · **Depends on:** 12 ·
+**Route:** `/patients/prescriptions` · **API:** `GET /patient/me`, `GET /patient/prescriptions-full` · **Depends on:** 12 ·
 **Traces to:** `PAT-RX-*`, `BR-CLIN-07`
 
 ## 1. Purpose
@@ -40,12 +39,6 @@ address: "<line1> <line2> <city> <state> <postal> <country>" trimmed, emergency_
   pharmacy; ordered by `appointment_time DESC`.
 - Item `{appointment_time, doctor_name, appointment_status, appointment_note, symptoms, diagnosis, lab_results,
   medication_details, pharmacy_name, appointment_created_at}` (strings default to "").
-
-### Other patient endpoints (API only, unused by the UI)
-- `GET /patient/medical-history` — own non-deleted records joined to non-deleted appointments:
-  `[{date, doctor (doctor_id), diagnosis, notes (symptoms)}]`.
-- `GET /patient/appointments/upcoming` — own non-deleted appointments (all times) by time:
-  `[{id, date, doctor (doctor_id), status}]`.
 
 ## 4. Acceptance criteria
 

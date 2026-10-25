@@ -1,7 +1,7 @@
 # Feature 19 — Admin: Register Users (Doctor, Patient, Admin, Support Staff)
 
 **Roles:** A · **Routes:** `/admin/register-doctor`, `/admin/register-patient`, `/admin/register-admin`,
-`/admin/register-support-staff` · **API:** `POST /admin/users`; legacy `POST /patients`, `POST /doctors` ·
+`/admin/register-support-staff` · **API:** `POST /admin/users` ·
 **Depends on:** 04 (email rule), F03, F04 · **Traces to:** `ADM-REG-*`
 
 ## 1. Purpose
@@ -31,8 +31,8 @@ Errors also clear after 10 s.
 
 ### 2.2 Register Patient (`h2` "Register Patient")
 Fields: Full Name, Email, Phone, Password (placeholder "Enter password"), Date of Birth \* (help "Select date from
-calendar"; same DOB checks as 2.1 without the age rule), Gender \* (select "Select Gender", Male, Female, Other — values
-SHALL be `MALE`, `FEMALE`, `OTHER` (GAP-07); missing → "Gender is required."), Address Line 1 ("Street address"),
+calendar"; same DOB checks as 2.1 without the age rule), Gender \* (select "Select Gender", Male, Female, Other, Prefer not to say —
+values `MALE`, `FEMALE`, `OTHER`, `PREFER_NOT_TO_SAY`; missing → "Gender is required."), Address Line 1 ("Street address"),
 City ("City name"), State ("State or province"), Postal Code ("ZIP or postal code"), Insurance Provider ("Insurance
 company name (optional)"), Insurance Policy Number ("Policy number (optional)"). Country is not shown; the server
 defaults it to "USA". Success "Patient registration successful!" with the same 10 s / 3 s timing.
@@ -57,14 +57,14 @@ message.
 |-------|---------------|
 | `role` | `^(PATIENT\|DOCTOR\|ADMIN\|SUPPORT_STAFF)$` |
 | `full_name` | 3–255 |
-| `email` | 5–255; SHALL match the email pattern; lower-cased and trimmed |
+| `email` | 5–255; email pattern (VAL-02); lower-cased and trimmed |
 | `password` | 8–255 |
-| `phone` | ≤ 50 (`""`) |
+| `phone` | ≤ 50; phone pattern (VAL-03) when non-empty (`""`) |
 | `specialty` | ≤ 255 (`""`) |
 | `license_number` | ≤ 100 (`""`) |
 | `insurance_provider`, `insurance_policy_number` | ≤ 255 (`""`) |
-| `date_of_birth` | `YYYY-MM-DD` or null |
-| `gender` | null or one of the gender values |
+| `date_of_birth` | `YYYY-MM-DD` or null; not in the future, ≤ 120 years; for `DOCTOR` also age ≥ 18 |
+| `gender` | null or one of the gender values, any case (stored upper-case) |
 | `address_line1`, `address_line2` | ≤ 255 (`""`) |
 | `city`, `state` | ≤ 100 (`""`) |
 | `postal_code` | ≤ 20 (`""`) |
@@ -79,14 +79,10 @@ Processing:
 3. Insert the role profile: PATIENT (all patient fields, empty → NULL, country default "USA"), DOCTOR
    (`specialty`, `license_number`, `phone` or NULL, `date_of_birth`), ADMIN (`full_name`, `phone`), SUPPORT_STAFF
    (`full_name`, `phone` or NULL).
-4. Audit `users` INSERT `{email, role}` by the admin (GAP-04). Commit. **201** `{"id": "<user id>"}`.
+4. Audit `users` INSERT `{email, role, created_by_admin: true}` performed by the admin. Commit. **201** `{"id": "<user id>"}`.
 
-### Legacy profile attachment (API only)
-- `POST /patients` (A) `{user_id, full_name (3..255), phone?, insurance_provider?, insurance_policy_number?}` — user
-  must be in the tenant and not deleted (404 "Target user not found."); duplicate → 409 "Patient profile already
-  exists."; audit; 201 `{id}`.
-- `POST /doctors` (A) `{user_id, full_name, specialty?, license_number?, phone?}` — same rules ("Doctor profile
-  already exists."); 201 `{id}`.
+The user and the role profile are always created together; there is no endpoint to attach a profile to an
+existing user.
 
 ## 4. Acceptance criteria
 

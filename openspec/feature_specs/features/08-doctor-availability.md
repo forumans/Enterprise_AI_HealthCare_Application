@@ -2,8 +2,8 @@
 
 **Roles:** D (own slots), S (any doctor of the clinic); all signed-in roles read ·
 **Routes:** `/doctors/manage-availability`, `/support/doctor-availability` ·
-**API:** `GET /doctors`, `GET /doctors/me`, `GET /doctor/availability/{doctor_id}/all`, `GET /doctor/availability/{doctor_id}/ndays`,
-`GET /availability/{doctor_id}?date=`, `POST /doctor/availability`, `POST|DELETE /doctor/availability/{doctor_id}` ·
+**API:** `GET /doctors`, `GET /doctors/me`, `GET /doctor/availability/{doctor_id}/all`, `POST /doctor/availability`,
+`DELETE /doctor/availability/{doctor_id}` ·
 **Depends on:** F02, F03, F05, 15 (doctor search) · **Traces to:** `BR-SLOT-*`, `DOC-AVAIL-*`, `SUP-AV-*`
 
 ## 1. Purpose
@@ -66,27 +66,15 @@ approval aren't offered to patients), ordered by
    `[{"slot_time": "<ISO>", "status": "AVAILABLE" | "BOOKED" | "BLOCKED"}]`, with BR-SLOT-08 applied (live
    appointments of that doctor at those times, `status <> CANCELLED`, `deleted_at IS NULL`).
 
-### 3.4 `GET /doctor/availability/{doctor_id}/ndays` — any signed-in role (read-only, no generation)
-`AVAILABLE` slots of a non-deleted tenant doctor between now and now+30 days: `[{"slot_time"}]`. (Unused by the UI.)
-
-### 3.5 `GET /availability/{doctor_id}?date=YYYY-MM-DD` — any signed-in role
-`AVAILABLE` slots on that clinic day: `[{"slot": "<ISO>"}]`; bad date → 422 "Invalid date format.". (Unused by
-the UI.)
-
-### 3.6 `POST /doctor/availability` — D (own), S (with `doctor_id`)
+### 3.4 `POST /doctor/availability` — D (own), S (with `doctor_id`)
 Request `{"slot": "<ISO>", "is_available": bool = true, "block_reason": str?, "doctor_id": str?}`.
 Order: resolve the doctor (BR-SLOT-07) → parse `slot` (422 "Invalid slot timestamp.") → window check
 (BR-SLOT-04) → transition (BR-SLOT-06) → audit → commit → `{"message": …}`.
 
-### 3.7 `POST /doctor/availability/{doctor_id}` — D (own), S (legacy upsert)
-Request `{"slot_time": "<ISO>", "is_available": bool = true}`. Parse (422 "Invalid datetime format.") → resolve
-doctor → window → existing `BOOKED` → 400; existing → set `AVAILABLE`/`BLOCKED` ("Availability updated
-successfully"); none → create ("Availability added successfully"). Does not touch `block_reason`.
-
-### 3.8 `DELETE /doctor/availability/{doctor_id}` — D (own), S
+### 3.5 `DELETE /doctor/availability/{doctor_id}` — D (own), S (supported API; no UI button)
 Request body `{"slot_time": "<ISO>"}`. Parse → resolve doctor → window → missing → 404 "Availability slot not
 found." → `BOOKED` → 400 → audit DELETE → hard delete → `{"message": "Availability deleted successfully"}`.
-(No UI button today.)
+It is the only way to remove an hour from a doctor's schedule, so it stays part of the API.
 
 ## 4. UI — Manage Availability grid (`UI-CMP-AVAILGRID`)
 
@@ -100,7 +88,7 @@ Used by the doctor at `/doctors/manage-availability` and embedded by support sta
    screen shows Name, Specialization, License Number from the picked doctor (no phone).
 3. Grid card:
    - Navigation row: "Previous Week" (disabled and grey at week 0) · "Week of M/D - M/D" with `ClinicTimeNote`
-     · "Next Week" (SHALL be disabled at week 4 — GAP-10).
+     · "Next Week" (disabled and grey at week 4: slots can be changed only 30 days ahead).
    - Message box (only when set): success = blue text/border `#42b5f5` on `rgba(66,181,245,0.1)`, error = pink.
      Success messages clear after 5 s; errors stay until the next action.
    - "Loading availability..." while loading, else a table:
@@ -114,7 +102,7 @@ Used by the doctor at `/doctors/manage-availability` and embedded by support sta
 |-------|-------|-------|-------|
 | no slot | "Click to Add" | dashed 2 px `#42b5f5` border, blue tint; hover brighter + scale 1.02 | add as available |
 | `AVAILABLE` | "Available" | teal `#49d7c2` text/border, `rgba(73,215,194,0.2)` fill | prompt "Enter reason for blocking this slot:"; Cancel aborts; OK → block with the entered reason |
-| `BLOCKED` | "Blocked" | red `#ef4444` text/border, `rgba(239,68,68,0.2)` fill | prompt "Enter reason for unblocking this slot:"; Cancel aborts; OK → unblock (reason not stored — GAP-12) |
+| `BLOCKED` | "Blocked" | red `#ef4444` text/border, `rgba(239,68,68,0.2)` fill | `confirm("Unblock this slot? Patients will be able to book it again.")`; Cancel aborts; OK → unblock (no reason is asked or sent; unblocking clears it) |
 | `BOOKED` | "Patient Booked" | orange `#fb923c`, `not-allowed` cursor, disabled | none |
 
 ### 4.2 Data and actions

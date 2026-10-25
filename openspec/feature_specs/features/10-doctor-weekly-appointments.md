@@ -33,8 +33,8 @@ and a patient details panel.
 
 ## 3. Behavior
 
-- Week start = Monday of the clinic's current week; load with `GET /doctor/appointments/all?from_date=<Monday
-  YYYY-MM-DD>` on mount and on week change.
+- Week start = Monday of the clinic's current week; load with `GET /doctor/appointments/all?include_cancelled=true&from_date=<Monday
+  YYYY-MM-DD>` on mount and on week change. Cancelled appointments are shown in pink with no actions.
 - Appointments are grouped by the clinic-calendar day of `time` (F05), not the browser's day.
 - **Confirm:** `confirm("Are you sure you want to confirm this appointment?")` → `POST /appointments/{id}/confirm`
   → reload → `alert("Appointment confirmed successfully")`; failure `alert("Failed to confirm appointment. Please
@@ -52,11 +52,8 @@ and a patient details panel.
 - Caller's doctor profile (no profile → `[]`); appointments of that doctor in the tenant and range, not
   soft-deleted, joined to patients that are not soft-deleted, ordered by time.
 - Item `{id, doctor_id, time: <ISO>, patient_name, symptoms: <notes or "">, status}`.
-
-Related (not used by this screen): `GET /doctor/appointments?from_date=` — same week query restricted to
-anchors between clinic today and today+30 (400 "Cannot request appointments earlier than today." /
-"Cannot request appointments beyond 30 days."), items `{id, time, patient_name, symptoms}`;
-`GET /doctor/appointments/upcoming` — appointments from now, `{id, time, patient_name, status, urgent: ""}`.
+- `include_cancelled=true` (sent by this screen) also returns cancelled appointments (soft-deleted on cancel),
+  with status `CANCELLED`.
 
 ## 5. Acceptance criteria
 

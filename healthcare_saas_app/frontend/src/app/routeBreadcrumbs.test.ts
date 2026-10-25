@@ -18,10 +18,19 @@ describe("route breadcrumbs", () => {
     expect(getRouteBreadcrumb("/reset-password")).toBe("Home > Reset Password");
   });
 
-  it("has a breadcrumb for every Support Staff menu entry", () => {
-    for (const item of submenuMap["Support Staff"]) {
-      expect(getRouteBreadcrumb(item.to)).not.toBe("Home");
+  it("has a breadcrumb for every menu entry of every role", () => {
+    for (const items of Object.values(submenuMap)) {
+      for (const item of items) {
+        expect(getRouteBreadcrumb(item.to), item.to).not.toBe("Home");
+      }
     }
+  });
+
+  it("labels the doctor screens, including a consultation of any appointment", () => {
+    expect(getRouteBreadcrumb("/doctors/today-appointments")).toBe("Home > Doctors > Today's Appointments");
+    expect(getRouteBreadcrumb("/doctors/manage-availability")).toBe("Home > Doctors > Manage Availability");
+    expect(getRouteBreadcrumb("/doctors/consultation/0b7c9d1e-1234-4abc-9def-001122334455")).toBe("Home > Doctors > Consultation");
+    expect(getRouteBreadcrumb("/admin/reset-password")).toBe("Home > Admin > Reset Password / Email");
   });
 
   it("falls back to Home for unknown paths", () => {

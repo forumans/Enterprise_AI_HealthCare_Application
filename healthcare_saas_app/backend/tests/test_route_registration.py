@@ -21,7 +21,6 @@ class RouteRegistrationTests(unittest.TestCase):
         self.assertEqual(duplicates, [])
 
     def test_static_doctor_appointment_routes_are_not_shadowed_by_the_id_route(self):
-        self.assertEqual(_handler_for("/api/doctor/appointments/upcoming"), "doctor_appointments_upcoming")
         self.assertEqual(_handler_for("/api/doctor/appointments/today"), "doctor_appointments_today")
         self.assertEqual(_handler_for("/api/doctor/appointments/all"), "doctor_all_appointments")
         self.assertEqual(_handler_for("/api/doctor/appointments/3f1c-uuid"), "doctor_get_appointment_details")
@@ -29,6 +28,37 @@ class RouteRegistrationTests(unittest.TestCase):
     def test_reschedule_and_cancel_routes_are_registered(self):
         self.assertEqual(_handler_for("/api/appointments/3f1c-uuid/reschedule", "POST"), "reschedule_appointment_route")
         self.assertEqual(_handler_for("/api/appointments/3f1c-uuid", "DELETE"), "delete_appointment")
+
+    def test_duplicate_and_legacy_endpoints_are_gone(self):
+        # GAP-22: endpoints no screen used, each duplicating a supported one, were removed
+        paths = app.openapi()["paths"]
+        removed = [
+            ("get", "/availability/{doctor_id}"),
+            ("get", "/doctor/availability/{doctor_id}/ndays"),
+            ("post", "/doctor/availability/{doctor_id}"),
+            ("get", "/doctor/appointments"),
+            ("get", "/doctor/appointments/upcoming"),
+            ("get", "/patient/medical-history"),
+            ("get", "/patient/appointments/upcoming"),
+            ("patch", "/patient/profile"),
+            ("get", "/patients"),
+            ("post", "/patients"),
+            ("get", "/patients/{patient_id}/prescriptions"),
+            ("post", "/doctors"),
+            ("post", "/admin/reset-password"),
+            ("post", "/admin/change-email"),
+        ]
+        for method, path in removed:
+            for prefix in ("", "/api"):
+                with self.subTest(method=method, path=prefix + path):
+                    self.assertNotIn(method, paths.get(prefix + path, {}))
+
+    def test_supported_api_only_endpoints_stay(self):
+        # Kept on purpose: deleting a slot and the admin's full appointment history have no other endpoint
+        paths = app.openapi()["paths"]
+        self.assertIn("delete", paths["/api/doctor/availability/{doctor_id}"])
+        self.assertIn("get", paths["/api/admin/appointments"])
+        self.assertIn("get", paths["/api/doctors"])  # GET /doctors stays; only POST /doctors was removed
 
 
 if __name__ == "__main__":

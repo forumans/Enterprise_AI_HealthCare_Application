@@ -234,10 +234,10 @@ export function SystemDashboardPage({ auth, userData }: SystemDashboardPageProps
                             borderRadius: '4px',
                             fontSize: '12px',
                             fontWeight: '500',
-                            backgroundColor: user.is_deleted ? '#ff90ab' : '#49d7c2',
+                            backgroundColor: user.is_active ? '#49d7c2' : '#ff90ab',
                             color: 'white'
                           }}>
-                            {user.is_deleted ? 'Inactive' : 'Active'}
+                            {user.is_active ? 'Active' : 'Inactive'}
                           </span>
                         </td>
                       </tr>

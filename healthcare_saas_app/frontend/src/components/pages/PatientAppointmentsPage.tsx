@@ -39,7 +39,8 @@ export function PatientAppointmentsPage({ auth, appointments, userData }: Patien
   const [availabilityRefreshKey, setAvailabilityRefreshKey] = useState(0);
   const [bookedAppointments, setBookedAppointments] = useState<Array<{ slot_time: string }>>([]);
   const [appointmentReason, setAppointmentReason] = useState("");
-  const [patientAppointments, setPatientAppointments] = useState<Array<any>>([]);
+  // The patient's appointments (one list, from the appointments hook) drive both the tables and the calendar
+  const patientAppointments: AppointmentRow[] = appointments.appointments;
   const [rescheduleTarget, setRescheduleTarget] = useState<RescheduleTarget | null>(null);
 
   useEffect(() => {
@@ -59,17 +60,6 @@ export function PatientAppointmentsPage({ auth, appointments, userData }: Patien
             console.error('Failed to load doctors:', error);
             setDoctorsError("Failed to load doctors.");
           });
-          
-        // Load patient appointments
-        if (auth.session.accessToken) {
-          api.listAllAppointments(auth.session.accessToken)
-            .then(data => {
-              setPatientAppointments(data);
-            })
-            .catch((err) => {
-              console.error("Failed to load patient appointments:", err);
-            });
-        }
       } catch (error) {
         console.error("Failed to load patient data:", error);
       } finally {
@@ -139,11 +129,8 @@ export function PatientAppointmentsPage({ auth, appointments, userData }: Patien
       return;
     }
 
-    // Capture the appointment before refreshing - the refreshed lists drop cancelled appointments,
-    // and patientAppointments may not include one booked moments ago.
-    const cancelledAppointment =
-      appointments.appointments.find((apt: AppointmentRow) => apt.id === appointmentId) ??
-      patientAppointments.find(apt => apt.id === appointmentId);
+    // Capture the appointment before refreshing - the refreshed list drops cancelled appointments
+    const cancelledAppointment = patientAppointments.find(apt => apt.id === appointmentId);
 
     setCancellingId(appointmentId);
     try {
@@ -157,16 +144,7 @@ export function PatientAppointmentsPage({ auth, appointments, userData }: Patien
       if (cancelledTime) {
         setBookedAppointments(prev => removeCancelledBooking(prev, cancelledTime, timeZone));
       }
-      
-      // Also refresh the local patientAppointments state
-      api.listAllAppointments(auth.session.accessToken)
-        .then(data => {
-          setPatientAppointments(data);
-        })
-        .catch((err) => {
-          console.error("Failed to refresh appointments:", err);
-        });
-      
+
       // Refresh the availability to show the slot as available again
       if (selectedDoctorId) {
         api.listAllDoctorAvailability(selectedDoctorId, auth.session.accessToken)
@@ -193,9 +171,6 @@ export function PatientAppointmentsPage({ auth, appointments, userData }: Patien
   const handleRescheduled = async () => {
     await appointments.loadPatientAppointments();
     setBookedAppointments([]);
-    api.listAllAppointments(auth.session.accessToken)
-      .then(setPatientAppointments)
-      .catch((err) => console.error("Failed to refresh appointments:", err));
     setAvailabilityRefreshKey(prev => prev + 1);
   };
 
@@ -250,16 +225,7 @@ export function PatientAppointmentsPage({ auth, appointments, userData }: Patien
           console.error("Failed to refresh availability:", err);
         });
       
-      // Refresh patient appointments - both local state and appointments hook
-      api.listAllAppointments(auth.session.accessToken)
-        .then(data => {
-          setPatientAppointments(data);
-        })
-        .catch((err) => {
-          console.error("Failed to refresh appointments:", err);
-        });
-      
-      // Also refresh the appointments hook to update the My Appointments table
+      // Refresh the patient's appointments (My Appointments table and calendar)
       await appointments.loadPatientAppointments();
         
       alert("Appointment booked successfully!");

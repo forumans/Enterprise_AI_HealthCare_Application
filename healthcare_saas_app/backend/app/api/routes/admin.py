@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import and_, case, func, select, update
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +17,7 @@ from ...core.timeutils import clinic_day_start, clinic_today, utc_now
 from ...models import Admin, Appointment, Doctor, MedicalRecord, Patient, SupportStaff, User
 from ...services.account_service import ensure_can_remove, ensure_email_available, restore_account
 from ...services.audit_service import write_audit_log
+from ..validators import valid_birth_date, valid_doctor_birth_date, valid_email, valid_gender, valid_phone
 
 router = APIRouter(prefix="/admin")
 
@@ -225,6 +226,30 @@ class AdminCreateUserRequest(BaseModel):
     postal_code: str = Field(default="", max_length=20)
     country: str = Field(default="USA", max_length=100)
 
+    # Same rules as the registration forms; gender is stored as the gender_type value ("Male" -> "MALE")
+    @field_validator("email")
+    @classmethod
+    def _check_email(cls, value: str) -> str:
+        return valid_email(value)
+
+    @field_validator("phone")
+    @classmethod
+    def _check_phone(cls, value: str) -> str:
+        return valid_phone(value) or ""
+
+    @field_validator("gender")
+    @classmethod
+    def _check_gender(cls, value: str | None) -> str | None:
+        return valid_gender(value)
+
+    @model_validator(mode="after")
+    def _check_date_of_birth(self) -> "AdminCreateUserRequest":
+        if self.role == "DOCTOR":
+            valid_doctor_birth_date(self.date_of_birth)
+        else:
+            valid_birth_date(self.date_of_birth)
+        return self
+
 
 @router.post("/users", status_code=status.HTTP_201_CREATED)
 async def admin_create_user(
@@ -320,7 +345,17 @@ async def admin_create_user(
                 phone=payload.phone or None,
             )
         )
-    
+
+    await write_audit_log(
+        db,
+        tenant_id=identity.tenant_id,
+        table_name="users",
+        record_id=user.id,
+        action_type="INSERT",
+        old_data=None,
+        new_data={"email": user.email, "role": user.role, "created_by_admin": True},
+        performed_by=identity.user_id,
+    )
     await db.commit()
     return {"id": str(user.id)}
 
@@ -358,7 +393,7 @@ async def soft_delete_user(
             await db.execute(
                 update(User)
                 .where(User.id == user_uuid_to_update)
-                .values(is_active=False, deleted_at=utc_now())
+                .values(is_active=False, deleted_at=utc_now(), deleted_by=identity.user_id)
             )
             
             # Then update the patients table with deleted_at = NOW()
@@ -414,7 +449,7 @@ async def soft_delete_user(
             await db.execute(
                 update(User)
                 .where(User.id == user_id)
-                .values(is_active=False, deleted_at=utc_now())
+                .values(is_active=False, deleted_at=utc_now(), deleted_by=identity.user_id)
             )
             
             await write_audit_log(
@@ -455,7 +490,7 @@ async def soft_delete_user(
         await db.execute(
             update(User)
             .where(User.id == user_id)
-            .values(is_active=False, deleted_at=utc_now())
+            .values(is_active=False, deleted_at=utc_now(), deleted_by=identity.user_id)
         )
         
         await write_audit_log(

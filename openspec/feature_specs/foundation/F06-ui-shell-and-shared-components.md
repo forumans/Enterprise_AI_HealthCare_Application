@@ -135,11 +135,11 @@ login form; entering any path containing `/register` clears the login and patien
 | `/doctors/login` · `/register` | "Home > Doctors > Login" · "Home > Doctors > Register" |
 | `/doctors/appointments` · `/today-appointments` · `/search-patients` · `/manage-availability` · `/profile` · `/consultation/:id` | "Home > Doctors > Appointments" · "… > Today's Appointments" · "… > Search Patients" · "… > Manage Availability" · "… > Update Profile" · "… > Consultation" |
 | `/support/login` · `/patient-appointments` · `/doctor-appointments` · `/doctor-availability` · `/profile` | "Home > Support Staff > Login" · "… > Patient Appointments" · "… > Doctor Appointments" · "… > Doctor Availability" · "… > Update Profile" |
-| `/admin/setup` · `/system-dashboard` · `/register-doctor` · `/register-patient` · `/register-admin` · `/register-support-staff` · `/reset-password` · `/deactivate` · `/clinic-settings` | "Home > Admin > First-Time Setup" · "… > System Dashboard" · "… > Register Doctor" · "… > Register Patient" · "… > Register Admin" · "… > Register Support Staff" · "… > Reset Password / Email" · "… > Deactivate" · "… > Clinic Settings" |
+| `/admin/login` · `/admin/setup` · `/system-dashboard` · `/register-doctor` · `/register-patient` · `/register-admin` · `/register-support-staff` · `/reset-password` · `/deactivate` · `/clinic-settings` | "Home > Admin > Login" · "Home > Admin > First-Time Setup" · "… > System Dashboard" · "… > Register Doctor" · "… > Register Patient" · "… > Register Admin" · "… > Register Support Staff" · "… > Reset Password / Email" · "… > Deactivate" · "… > Clinic Settings" |
 | `/forgot-password` · `/reset-password` | "Home > Forgot Password" · "Home > Reset Password" |
 | anything else | "Home" |
 
-(The current code misses some of these; see GAP-11.)
+A test checks that every menu entry of every role has a label.
 
 ## 4. Forms and feedback
 

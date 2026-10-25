@@ -82,10 +82,10 @@ Screens are specified separately and only call these endpoints.
 |--------|----------|-----|-------|---------|
 | Confirm | `POST /appointments/{id}/confirm` | D (own) | 404 if missing/deleted/other tenant; 403 "Not allowed to change this appointment." if not own; 400 unless `SCHEDULED` | `{"message": "Appointment confirmed successfully."}`; audit `{status:"SCHEDULED"}`→`{status:"CONFIRMED"}` |
 | Edit reason | `PATCH /appointments/{id}` `{reason ≥5}` | S | 404; only `SCHEDULED`/`CONFIRMED` else 400 "Only scheduled or confirmed appointments can be updated."; stored trimmed | `{"id", "reason", "status"}`; audit `{notes}` old→new |
-| Set status | `PATCH /appointments/{id}/status` `{status}` | D (own), A | value upper-cased/trimmed; `CANCELLED` → 400 "Use DELETE /appointments/{id} to cancel an appointment."; not in `SCHEDULED/CONFIRMED/COMPLETED` → 422 "Invalid appointment status."; 404; doctor not own → 403 "Not allowed to change this appointment." | `{"message": "Appointment status updated."}`; audit `{status}` old→new |
+| Set status | `PATCH /appointments/{id}/status` `{status}` | D (own), A | value upper-cased/trimmed; `CANCELLED` → 400 "Use DELETE /appointments/{id} to cancel an appointment."; not in `SCHEDULED/CONFIRMED/COMPLETED` → 422 "Invalid appointment status."; 404; doctor not own → 403 "Not allowed to change this appointment."; same as the current status → no-op success (no audit); only `SCHEDULED→CONFIRMED`, `SCHEDULED→COMPLETED`, `CONFIRMED→COMPLETED` are allowed, anything else → 400 "Can't change an appointment from <old> to <new>." | `{"message": "Appointment status updated."}`; audit `{status}` old→new |
 | Cancel | `DELETE /appointments/{id}` | P (own), D (own), S, A | 404; patient/doctor not own → 403 "Not allowed to cancel this appointment." | `{"message": "Appointment cancelled."}`; audit DELETE `{status: old}`→`{status:"CANCELLED"}` |
 
-Time changes go only through reschedule. Status endpoint SHOULD also refuse transitions out of terminal states.
+Time changes go only through reschedule. A `COMPLETED` visit can't be reopened, not even by an admin.
 
 ## 6. List endpoints (scoped to the caller)
 
@@ -95,7 +95,7 @@ DOCTOR sees `doctor_id = own`; a patient/doctor without a profile gets `[]`. All
 | Endpoint | Roles | Response item | Order |
 |----------|-------|---------------|-------|
 | `GET /appointments` | any signed-in | `{id, doctor_id, patient_id, appointment_time, status}` | unspecified |
-| `GET /appointments/all` | any signed-in | `{id, doctor_id, patient_id, slot_id, appointment_time, status, notes, doctor_name}` (`doctor_name` from a tenant-filtered, non-deleted doctor join; "Unknown Doctor" when missing) | `appointment_time` asc |
+| `GET /appointments/all?include_cancelled=` | any signed-in | `{id, doctor_id, patient_id, slot_id, appointment_time, status, notes, doctor_name}` (`doctor_name` from a tenant-filtered, non-deleted doctor join; "Unknown Doctor" when missing). `include_cancelled=true` also returns cancelled appointments (soft-deleted on cancel) | `appointment_time` asc |
 | `GET /appointments/week?from_date=YYYY-MM-DD` | any signed-in | same as `/all` (`doctor_name` null when missing) | asc, limited to the clinic week (Mon–Mon) containing `from_date` (default clinic today) |
 
 Doctor-specific views are in [10](10-doctor-weekly-appointments.md)/[11](11-doctor-today-appointments.md);

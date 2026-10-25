@@ -8,14 +8,11 @@ import { useState, useEffect } from "react";
 import { useLocation } from "react-router-dom";
 import { api } from "../api";
 import { parseErrorMessage, getTodayFormatted, convertDateFormat } from "../utils";
-import { APPOINTMENT_STATUS_REDIRECT_DELAY } from "../constants";
-import type { 
-  AppointmentRow, 
-  DoctorAppointmentRow, 
-  PatientSearchRow, 
-  AppointmentBookingState,
+import type {
+  AppointmentRow,
+  DoctorAppointmentRow,
+  PatientSearchRow,
   SessionState,
-  Role 
 } from "../types/app";
 
 export function useAppointments(session: SessionState) {
@@ -23,13 +20,6 @@ export function useAppointments(session: SessionState) {
   const [doctorAppointments, setDoctorAppointments] = useState<DoctorAppointmentRow[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchRows, setSearchRows] = useState<PatientSearchRow[]>([]);
-  
-  const [bookingState, setBookingState] = useState<AppointmentBookingState>({
-    doctorId: "",
-    slot: "",
-    reason: "",
-    appointmentId: ""
-  });
 
   // Explicit week start chosen by the caller; empty means today in clinic time (resolved when used)
   const [fromDate, setFromDate] = useState("");
@@ -48,36 +38,9 @@ export function useAppointments(session: SessionState) {
    */
   async function loadPatientAppointments() {
     try {
-      const rows = await api.listAllAppointments(session.accessToken);
+      // Cancelled visits too, so the patient sees them under Past
+      const rows = await api.listAllAppointments(session.accessToken, true);
       setAppointments(rows);
-    } catch (error) {
-      throw new Error(parseErrorMessage(error));
-    }
-  }
-
-  /**
-   * Books a new appointment
-   */
-  async function bookAppointment() {
-    try {
-      await api.bookAppointment(session.accessToken, { 
-        doctor_id: bookingState.doctorId, 
-        slot: bookingState.slot, 
-        reason: bookingState.reason 
-      });
-      await loadPatientAppointments();
-    } catch (error) {
-      throw new Error(parseErrorMessage(error));
-    }
-  }
-
-  /**
-   * Cancels an existing appointment
-   */
-  async function cancelAppointment() {
-    try {
-      await api.cancelAppointment(session.accessToken, bookingState.appointmentId);
-      await loadPatientAppointments();
     } catch (error) {
       throw new Error(parseErrorMessage(error));
     }
@@ -159,21 +122,17 @@ export function useAppointments(session: SessionState) {
     doctorAppointments,
     searchQuery,
     searchRows,
-    bookingState,
     fromDate,
-    
+
     // Actions
     setAppointments,
     setDoctorAppointments,
     setSearchQuery,
     setSearchRows,
-    setBookingState,
     setFromDate,
-    
-    // API functions
+
+    // API functions (booking and cancelling are done by the pages through api.ts)
     loadPatientAppointments,
-    bookAppointment,
-    cancelAppointment,
     loadDoctorData,
     loadDoctorDataWithDate,
     searchPatients,

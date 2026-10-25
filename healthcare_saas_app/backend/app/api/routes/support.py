@@ -173,6 +173,7 @@ async def support_list_appointments(
             Appointment.deleted_at.is_(None),
             Appointment.appointment_time >= clinic_day_start(clinic_today(identity.clinic_tz), identity.clinic_tz),
             Patient.deleted_at.is_(None),
+            Doctor.deleted_at.is_(None),
         )
         .order_by(Appointment.appointment_time.asc())
     )

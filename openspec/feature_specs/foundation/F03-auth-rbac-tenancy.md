@@ -84,16 +84,13 @@ P = patient, D = doctor, S = support staff, A = admin. "own" = only records tied
 | `POST /appointments/{id}/confirm` | — | own | — | — |
 | `PATCH /appointments/{id}/status` | — | own | — | ✓ |
 | `PATCH /appointments/{id}` (reason) | — | — | ✓ | — |
-| `GET /doctors`, `GET /availability/{id}`, `GET /doctor/availability/{id}/all`, `/ndays` | ✓ | ✓ | ✓ | ✓ |
+| `GET /doctors`, `GET /doctor/availability/{id}/all` | ✓ | ✓ | ✓ | ✓ |
 | `POST /doctor/availability` | — | own | ✓ (doctor_id) | — |
-| `POST`, `DELETE /doctor/availability/{doctor_id}` | — | own | ✓ | — |
+| `DELETE /doctor/availability/{doctor_id}` | — | own | ✓ | — |
 | `GET /doctors/me`, `GET /doctor/profile`, `PUT /doctor/profile`, `GET /doctor/appointments*` | — | own | — | — |
-| `GET /patient/me`, `/patient/appointments/upcoming`, `/patient/medical-history`, `PATCH /patient/profile`, `GET/PUT /patient/patient/profile`, `POST /patient/documents` | own | — | — | — |
+| `GET /patient/me`, `GET/PUT /patient/patient/profile`, `POST /patient/documents` | own | — | — | — |
 | `GET /patient/prescriptions-full` | own | ✓ (patient_id) | — | — |
-| `GET /patients` | — | ✓ | ✓ | ✓ |
 | `GET /patients/search` | — | ✓ | — | ✓ |
-| `GET /patients/{id}/prescriptions` | — | ✓ | — | — |
-| `POST /patients`, `POST /doctors` (attach profile) | — | — | — | ✓ |
 | `POST /medical-records` | — | own | — | — |
 | `GET /medical-records/{appointment_id}` | own | own | — | ✓ |
 | `POST /prescriptions` | — | own | — | ✓ |

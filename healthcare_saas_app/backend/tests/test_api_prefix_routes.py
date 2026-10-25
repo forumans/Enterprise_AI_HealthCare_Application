@@ -15,6 +15,13 @@ class ApiPrefixRouteRegistrationTests(unittest.TestCase):
         self.assertIn("/api/doctors", paths)
         self.assertIn("/api/appointments/all", paths)
 
+    def test_health_is_served_with_and_without_the_api_prefix(self):
+        paths = set(app.openapi()["paths"])
+
+        for path in ("/health", "/health/ready", "/health/live"):
+            self.assertIn(path, paths)
+            self.assertIn(f"/api{path}", paths)
+
     def test_api_public_auth_routes_are_excluded_from_tenant_middleware(self):
         tenant_middleware = next(m for m in app.user_middleware if m.cls is TenantContextMiddleware)
         excluded_paths = tenant_middleware.kwargs["excluded_paths"]

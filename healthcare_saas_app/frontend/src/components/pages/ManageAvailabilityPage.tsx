@@ -15,6 +15,9 @@ import {
 import { ClinicTimeNote } from "../common/ClinicTimeNote";
 import type { SessionState } from "../../types/app";
 
+/** Slots can be changed up to 30 days ahead, so the grid stops at the fifth week (same as the booking grids). */
+const MAX_WEEK_OFFSET = 4;
+
 export interface AvailabilityDoctor {
   id: string;
   name: string;
@@ -165,13 +168,11 @@ export function ManageAvailabilityPage({ auth, doctor }: ManageAvailabilityPageP
     
     try {
       if (existingSlot?.status === "BLOCKED") {
-        // Unblock the slot
-        const blockReason = window.prompt("Enter reason for unblocking this slot:");
-        if (blockReason === null) {
-          // User cancelled
+        // Unblock the slot (unblocking clears the block reason, so there is nothing to ask for)
+        if (!window.confirm("Unblock this slot? Patients will be able to book it again.")) {
           return;
         }
-        const response = await api.upsertDoctorAvailability(currentDoctor.id, utcSlotString, true, auth.session.accessToken, blockReason);
+        const response = await api.upsertDoctorAvailability(currentDoctor.id, utcSlotString, true, auth.session.accessToken);
         setMessage("Slot unblocked successfully");
         setMessageType("success");
       } else if (existingSlot?.status === "AVAILABLE") {
@@ -241,16 +242,17 @@ export function ManageAvailabilityPage({ auth, doctor }: ManageAvailabilityPageP
             <ClinicTimeNote />
           </span>
           <button 
-            onClick={() => setWeekOffset(weekOffset + 1)}
+            onClick={() => setWeekOffset(Math.min(MAX_WEEK_OFFSET, weekOffset + 1))}
+            disabled={weekOffset === MAX_WEEK_OFFSET}
             style={{
               padding: '8px 16px',
               fontSize: '14px',
               fontWeight: '500',
-              backgroundColor: '#42b5f5',
+              backgroundColor: weekOffset === MAX_WEEK_OFFSET ? '#94a3b8' : '#42b5f5',
               color: 'white',
               border: 'none',
               borderRadius: '4px',
-              cursor: 'pointer'
+              cursor: weekOffset === MAX_WEEK_OFFSET ? 'not-allowed' : 'pointer'
             }}
           >
             Next Week

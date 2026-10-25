@@ -13,7 +13,6 @@ import {
   AppHeader, 
   AppLayout, 
   ConsultationForm, 
-  PatientDetailsCard, 
   LoginPage,
   ProtectedRoute,
   StatusMessage
@@ -497,8 +496,4 @@ function HomePage({ auth, userData }: any) {
 
 function BillingPage() {
   return <div>Billing Page - To be implemented</div>;
-}
-
-function AdminRegisterAdminPage({ auth, userData }: any) {
-  return <div>Admin Register Admin Page - To be implemented</div>;
 }

@@ -6,7 +6,7 @@ from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy import and_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.dependencies import CurrentIdentity, get_current_identity, require_roles
@@ -28,6 +28,15 @@ class CreateAppointmentRequest(BaseModel):
 
 class UpdateAppointmentStatusRequest(BaseModel):
     status: str
+
+
+# Status changes allowed through PATCH /appointments/{id}/status: forward only, so a completed visit
+# (terminal) can't be reopened. Cancelling goes through DELETE.
+STATUS_MOVES = {
+    ("SCHEDULED", "CONFIRMED"),
+    ("SCHEDULED", "COMPLETED"),
+    ("CONFIRMED", "COMPLETED"),
+}
 
 
 class RescheduleAppointmentRequest(BaseModel):
@@ -169,7 +178,16 @@ async def list_appointments(
     ]
 
 
-async def _appointments_with_doctor_names(db: AsyncSession, identity: CurrentIdentity, *conditions, unknown_doctor: str | None) -> list[dict]:
+def live_or_cancelled(include_cancelled: bool):
+    """Appointments that aren't soft-deleted, plus (when asked) cancelled ones, which are soft-deleted on cancel."""
+    if include_cancelled:
+        return or_(Appointment.deleted_at.is_(None), Appointment.status == "CANCELLED")
+    return Appointment.deleted_at.is_(None)
+
+
+async def _appointments_with_doctor_names(
+    db: AsyncSession, identity: CurrentIdentity, *conditions, unknown_doctor: str | None, include_cancelled: bool = False
+) -> list[dict]:
     """The caller's visible appointments (see _scope_to_caller) with doctor names, in one joined query."""
 
     stmt = (
@@ -178,7 +196,7 @@ async def _appointments_with_doctor_names(db: AsyncSession, identity: CurrentIde
             Doctor,
             and_(Doctor.id == Appointment.doctor_id, Doctor.tenant_id == identity.tenant_id, Doctor.deleted_at.is_(None)),
         )
-        .where(Appointment.tenant_id == identity.tenant_id, Appointment.deleted_at.is_(None), *conditions)
+        .where(Appointment.tenant_id == identity.tenant_id, live_or_cancelled(include_cancelled), *conditions)
     )
     # Patients and doctors see only their own appointments; admins and support staff the tenant's
     stmt = _scope_to_caller(stmt, identity, await _caller_profile_id(db, identity))
@@ -203,11 +221,16 @@ async def _appointments_with_doctor_names(db: AsyncSession, identity: CurrentIde
 
 @router.get("/appointments/all")
 async def list_all_appointments(
+    include_cancelled: bool = False,
     identity: CurrentIdentity = Depends(get_current_identity),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    """Get all appointments for the current user without date filtering."""
-    return await _appointments_with_doctor_names(db, identity, unknown_doctor="Unknown Doctor")
+    """Get all appointments for the current user without date filtering.
+
+    With include_cancelled=true, cancelled appointments are listed too (status CANCELLED), so a patient can
+    see what they cancelled.
+    """
+    return await _appointments_with_doctor_names(db, identity, unknown_doctor="Unknown Doctor", include_cancelled=include_cancelled)
 
 
 @router.get("/appointments/week")
@@ -255,6 +278,14 @@ async def update_appointment_status(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to change this appointment.")
 
     old_status = row.status
+    if next_status == old_status:
+        # Repeating the current status is a no-op (e.g. re-saving a consultation after a partial failure)
+        return {"message": "Appointment status updated."}
+    if (old_status, next_status) not in STATUS_MOVES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Can't change an appointment from {old_status} to {next_status}.",
+        )
     row.status = next_status
     await write_audit_log(
         db,

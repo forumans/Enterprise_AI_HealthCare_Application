@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timedelta
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import and_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,13 +15,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...core import cross_tenant, rate_limit
 from ...core.dependencies import CurrentIdentity, get_current_identity, require_roles
 from ...core.database import get_db
-from ...models import Admin, Appointment, Doctor, DoctorAvailability, MedicalRecord, Patient, Prescription, User
+from ...models import Admin, Appointment, Doctor, DoctorAvailability, Patient, User
 from ...core.security import hash_password
 from ...core.timeutils import clinic_day_bounds, clinic_today, clinic_week_bounds, is_valid_timezone, parse_client_datetime, utc_now
 from ...services.availability_service import ensure_default_slots
 from ...services.account_service import ensure_email_available
 from ...services.audit_service import write_audit_log
 from ...services.tenant_service import resolve_registration_tenant, set_clinic_timezone
+from ..validators import optional_text, valid_doctor_birth_date, valid_email, valid_full_name, valid_phone
+from .appointments import live_or_cancelled
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -81,7 +84,7 @@ async def register_admin(
     platform operator, and further admins of a clinic by its admins (POST /admin/users), so this public
     endpoint can't be used to take over a running clinic or claim a newly created one.
     """
-    rate_limit.hit("register-ip", rate_limit.client_ip(http_request))
+    await rate_limit.hit(db, "register-ip", rate_limit.client_ip(http_request))
     if await cross_tenant.any_active_admin(db):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ADMIN_ALREADY_SET_UP)
     timezone = (payload.timezone or "").strip()
@@ -132,6 +135,22 @@ class DoctorRegisterRequest(BaseModel):
     phone: str | None = None
     date_of_birth: date | None = None
 
+    # Same rules as the registration form: the browser checks are a convenience only
+    @field_validator("email")
+    @classmethod
+    def _check_email(cls, value: str) -> str:
+        return valid_email(value)
+
+    @field_validator("phone")
+    @classmethod
+    def _check_phone(cls, value: str | None) -> str | None:
+        return valid_phone(value)
+
+    @field_validator("date_of_birth")
+    @classmethod
+    def _check_date_of_birth(cls, value: date | None) -> date | None:
+        return valid_doctor_birth_date(value)
+
 
 @router.post("/doctors/register", status_code=status.HTTP_201_CREATED)
 async def register_doctor(
@@ -144,7 +163,7 @@ async def register_doctor(
     The account starts deactivated: an admin must activate it (Admin > Deactivate) before the doctor
     can sign in, so nobody can pose as a clinic doctor just by registering.
     """
-    rate_limit.hit("register-ip", rate_limit.client_ip(http_request))
+    await rate_limit.hit(db, "register-ip", rate_limit.client_ip(http_request))
     password_hash = hash_password(payload.password)
 
     tenant = await resolve_registration_tenant(db, http_request)
@@ -195,14 +214,6 @@ async def register_doctor(
     }
 
 
-class CreateDoctorRequest(BaseModel):
-    user_id: str
-    full_name: str = Field(min_length=3, max_length=255)
-    specialty: str | None = None
-    license_number: str | None = None
-    phone: str | None = None
-
-
 class UpsertDoctorAvailabilityRequest(BaseModel):
     slot: str = Field(description="ISO datetime string for slot_time")
     is_available: bool = True
@@ -233,52 +244,6 @@ async def _doctor_for_slot_change(db: AsyncSession, identity: CurrentIdentity, d
     if doctor_id and doctor.id != doctor_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to change another doctor's availability.")
     return doctor
-
-
-@router.post("/doctors", status_code=status.HTTP_201_CREATED)
-async def create_doctor(
-    payload: CreateDoctorRequest,
-    identity: CurrentIdentity = Depends(require_roles("ADMIN")),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    user = (
-        await db.execute(
-            select(User).where(
-                User.id == payload.user_id,
-                User.tenant_id == identity.tenant_id,
-                User.deleted_at.is_(None),
-            )
-        )
-    ).scalar_one_or_none()
-    if user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target user not found.")
-
-    doctor = Doctor(
-        tenant_id=identity.tenant_id,
-        user_id=payload.user_id,
-        full_name=payload.full_name.strip(),
-        specialty=(payload.specialty or "").strip() or None,
-        license_number=(payload.license_number or "").strip() or None,
-        phone=(payload.phone or "").strip() or None,
-    )
-    db.add(doctor)
-    try:
-        await db.flush()
-    except IntegrityError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Doctor profile already exists.") from exc
-
-    await write_audit_log(
-        db,
-        tenant_id=identity.tenant_id,
-        table_name="doctors",
-        record_id=doctor.id,
-        action_type="INSERT",
-        old_data=None,
-        new_data={"user_id": doctor.user_id, "full_name": doctor.full_name},
-        performed_by=identity.user_id,
-    )
-    await db.commit()
-    return {"id": doctor.id}
 
 
 @router.get("/doctors/me")
@@ -331,70 +296,6 @@ async def list_doctors(
     )
     rows = (await db.execute(stmt)).scalars().all()
     return [{"id": row.id, "name": row.full_name, "specialty": row.specialty, "license_number": row.license_number} for row in rows]
-
-
-@router.get("/availability/{doctor_id}")
-async def list_availability(
-    doctor_id: str,
-    date: str = Query(...),
-    identity: CurrentIdentity = Depends(get_current_identity),
-    db: AsyncSession = Depends(get_db),
-) -> list[dict]:
-    try:
-        day = datetime.fromisoformat(date).date()
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid date format.") from exc
-
-    day_start, day_end = clinic_day_bounds(day, identity.clinic_tz)
-
-    stmt = (
-        select(DoctorAvailability)
-        .where(
-            and_(
-                DoctorAvailability.tenant_id == identity.tenant_id,
-                DoctorAvailability.doctor_id == doctor_id,
-                DoctorAvailability.slot_time >= day_start,
-                DoctorAvailability.slot_time < day_end,
-                DoctorAvailability.status == "AVAILABLE",
-            )
-        )
-        .order_by(DoctorAvailability.slot_time.asc())
-    )
-    rows = (await db.execute(stmt)).scalars().all()
-    return [{"slot": row.slot_time.isoformat()} for row in rows]
-
-
-@router.get("/doctor/availability/{doctor_id}/ndays")
-async def list_availability_next_30_days(
-    doctor_id: str,
-    identity: CurrentIdentity = Depends(get_current_identity),
-    db: AsyncSession = Depends(get_db),
-) -> list[dict]:
-    # Read-only listing: default slots are generated only by /doctor/availability/{doctor_id}/all.
-    # (main.py lists this path as auth-excluded, but exclusions match exact paths and the
-    # "{doctor_id}" template never matches a real URL, so this endpoint does require auth.)
-    now = utc_now()
-    end_date = now + timedelta(days=30)
-
-    stmt = (
-        select(DoctorAvailability.slot_time)
-        .select_from(DoctorAvailability)
-        .join(Doctor, Doctor.id == DoctorAvailability.doctor_id)
-        .where(
-            and_(
-                Doctor.id == doctor_id,
-                Doctor.tenant_id == identity.tenant_id,
-                DoctorAvailability.doctor_id == doctor_id,
-                DoctorAvailability.status == "AVAILABLE",
-                DoctorAvailability.slot_time >= now,
-                DoctorAvailability.slot_time <= end_date,
-                Doctor.deleted_at.is_(None),
-            )
-        )
-        .order_by(DoctorAvailability.slot_time.asc())
-    )
-    rows = (await db.execute(stmt)).scalars().all()
-    return [{"slot_time": row.isoformat()} for row in rows]
 
 
 @router.get("/doctor/availability/{doctor_id}/all")
@@ -477,62 +378,6 @@ async def list_all_availability(
             })
     
     return result
-
-
-class UpsertAvailabilityRequest(BaseModel):
-    slot_time: str = Field(description="ISO datetime string for slot_time")
-    is_available: bool = True
-
-
-@router.post("/doctor/availability/{doctor_id}")
-async def upsert_availability(
-    doctor_id: str,
-    payload: UpsertAvailabilityRequest,
-    identity: CurrentIdentity = Depends(get_current_identity),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    """Add or update availability for a doctor."""
-    try:
-        slot_time = parse_client_datetime(payload.slot_time)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid datetime format.") from exc
-
-    await _doctor_for_slot_change(db, identity, doctor_id)
-    _check_slot_window(slot_time)
-
-    # Check if slot already exists
-    existing = await db.execute(
-        select(DoctorAvailability).where(
-            and_(
-                DoctorAvailability.doctor_id == doctor_id,
-                DoctorAvailability.slot_time == slot_time,
-            )
-        )
-    )
-    existing = existing.scalar_one_or_none()
-
-    if existing:
-        if existing.status == "BOOKED":
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot modify a patient-booked slot.")
-        # Update existing
-        old_status = existing.status
-        existing.status = "AVAILABLE" if payload.is_available else "BLOCKED"
-        await _audit_slot(db, identity, existing, "UPDATE", old_status)
-        await db.commit()
-        return {"message": "Availability updated successfully"}
-    else:
-        # Create new
-        availability = DoctorAvailability(
-            tenant_id=identity.tenant_id,
-            doctor_id=doctor_id,
-            slot_time=slot_time,
-            status="AVAILABLE" if payload.is_available else "BLOCKED",
-        )
-        db.add(availability)
-        await db.flush()
-        await _audit_slot(db, identity, availability, "INSERT", None)
-        await db.commit()
-        return {"message": "Availability added successfully"}
 
 
 class DeleteAvailabilityRequest(BaseModel):
@@ -629,10 +474,14 @@ async def doctor_appointments_today(
 @router.get("/doctor/appointments/all")
 async def doctor_all_appointments(
     from_date: date | None = None,
+    include_cancelled: bool = False,
     identity: CurrentIdentity = Depends(require_roles("DOCTOR")),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    """Get all appointments for a given week without date restrictions."""
+    """The doctor's appointments in the clinic week containing from_date (past and future weeks alike).
+
+    With include_cancelled=true, cancelled appointments are listed too (status CANCELLED).
+    """
     
     anchor = from_date or clinic_today(identity.clinic_tz)
     
@@ -660,15 +509,14 @@ async def doctor_all_appointments(
                 Appointment.doctor_id == doctor.id,
                 Appointment.appointment_time >= week_start,
                 Appointment.appointment_time < week_end,
-                Appointment.deleted_at.is_(None),
+                live_or_cancelled(include_cancelled),
                 Patient.deleted_at.is_(None),
             )
         )
         .order_by(Appointment.appointment_time.asc())
     )
     rows = (await db.execute(stmt)).all()
-    
-    
+
     result = [
         {
             "id": appointment.id,
@@ -684,59 +532,16 @@ async def doctor_all_appointments(
     return result
 
 
-@router.get("/doctor/appointments/upcoming")
-async def doctor_appointments_upcoming(
-    identity: CurrentIdentity = Depends(require_roles("DOCTOR")),
-    db: AsyncSession = Depends(get_db),
-) -> list[dict]:
-    doctor = (
-        await db.execute(
-            select(Doctor).where(
-                Doctor.user_id == identity.user_id,
-                Doctor.tenant_id == identity.tenant_id,
-                Doctor.deleted_at.is_(None),
-            )
-        )
-    ).scalar_one_or_none()
-    if doctor is None:
-        return []
-
-    stmt = (
-        select(Appointment, Patient)
-        .join(Patient, Patient.id == Appointment.patient_id)
-        .where(
-            and_(
-                Appointment.tenant_id == identity.tenant_id,
-                Appointment.doctor_id == doctor.id,
-                Appointment.appointment_time >= utc_now(),
-                Appointment.deleted_at.is_(None),
-                Patient.deleted_at.is_(None),
-            )
-        )
-        .order_by(Appointment.appointment_time.asc())
-    )
-    rows = (await db.execute(stmt)).all()
-    return [
-        {
-            "id": appointment.id,
-            "time": appointment.appointment_time.isoformat(),
-            "patient_name": patient.full_name,
-            "status": appointment.status,
-            "urgent": "",
-        }
-        for appointment, patient in rows
-    ]
-
-
 @router.get("/doctor/appointments/{appointment_id}")
 async def doctor_get_appointment_details(
     appointment_id: str,
     identity: CurrentIdentity = Depends(require_roles("DOCTOR")),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    # Validate appointment_id to prevent invalid values like 'all'
-    # Only validate if it's supposed to be a UUID (not for other endpoints)
-    if appointment_id == 'all' or len(appointment_id) < 32:
+    # Anything that isn't a UUID (e.g. 'all') is refused before it reaches the database
+    try:
+        UUID(appointment_id)
+    except ValueError:
         raise HTTPException(status_code=400, detail="Invalid appointment ID")
     
     doctor = (
@@ -779,59 +584,6 @@ async def doctor_get_appointment_details(
         "status": appointment.status,
         "notes": appointment.notes,
     }
-
-
-@router.get("/doctor/appointments")
-async def doctor_weekly_appointments(
-    from_date: date | None = None,
-    identity: CurrentIdentity = Depends(require_roles("DOCTOR")),
-    db: AsyncSession = Depends(get_db),
-) -> list[dict]:
-    today = clinic_today(identity.clinic_tz)
-    anchor = from_date or today
-    if anchor < today:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot request appointments earlier than today.")
-    if anchor > today + timedelta(days=30):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot request appointments beyond 30 days.")
-
-    doctor = (
-        await db.execute(
-            select(Doctor).where(
-                Doctor.user_id == identity.user_id,
-                Doctor.tenant_id == identity.tenant_id,
-                Doctor.deleted_at.is_(None),
-            )
-        )
-    ).scalar_one_or_none()
-    if doctor is None:
-        return []
-
-    week_start, week_end = clinic_week_bounds(anchor, identity.clinic_tz)
-    stmt = (
-        select(Appointment, Patient)
-        .join(Patient, Patient.id == Appointment.patient_id)
-        .where(
-            and_(
-                Appointment.tenant_id == identity.tenant_id,
-                Appointment.doctor_id == doctor.id,
-                Appointment.appointment_time >= week_start,
-                Appointment.appointment_time < week_end,
-                Appointment.deleted_at.is_(None),
-                Patient.deleted_at.is_(None),
-            )
-        )
-        .order_by(Appointment.appointment_time.asc())
-    )
-    rows = (await db.execute(stmt)).all()
-    return [
-        {
-            "id": appointment.id,
-            "time": appointment.appointment_time.isoformat(),
-            "patient_name": patient.full_name,
-            "symptoms": appointment.notes or "",
-        }
-        for appointment, patient in rows
-    ]
 
 
 @router.post("/doctor/availability")
@@ -990,15 +742,22 @@ async def update_doctor_profile(
         
         old_data = {"full_name": doctor.full_name, "phone": doctor.phone, "specialty": doctor.specialty, "license_number": doctor.license_number}
 
-        # Update allowed fields (original Doctor model until database is updated)
-        if "fullName" in payload and payload["fullName"]:
-            doctor.full_name = payload["fullName"]
-        if "phone" in payload and payload["phone"]:
-            doctor.phone = payload["phone"]
+        # Name and phone change only when given; specialty and license whenever present (empty clears them)
+        try:
+            full_name = valid_full_name(payload.get("fullName"))
+            phone = valid_phone(optional_text(payload.get("phone"), 20))
+            specialty = optional_text(payload.get("specialty"), 255)
+            license_number = optional_text(payload.get("licenseNumber"), 100)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="Invalid request format. Please check your input and try again.")
+        if full_name:
+            doctor.full_name = full_name
+        if phone:
+            doctor.phone = phone
         if "specialty" in payload:
-            doctor.specialty = payload["specialty"]
+            doctor.specialty = specialty
         if "licenseNumber" in payload:
-            doctor.license_number = payload["licenseNumber"]
+            doctor.license_number = license_number
         # Note: Extended fields (DOB, gender, address) not in database yet
         # Note: Email is in users table, not doctors table
         # Note: Insurance fields are not in Doctor model

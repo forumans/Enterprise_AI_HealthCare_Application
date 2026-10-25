@@ -117,7 +117,7 @@ class GuardTests(unittest.TestCase):
         self.assertEqual(_allowed_roles(_route("/api/appointments/{appointment_id}/status", "PATCH")), {"DOCTOR", "ADMIN"})
 
     def test_doctor_list_and_availability_require_a_login(self):
-        for path in ("/api/doctors", "/api/doctor/availability/{doctor_id}/ndays"):
+        for path in ("/api/doctors", "/api/doctor/availability/{doctor_id}/all"):
             with self.subTest(path=path):
                 self.assertTrue(_depends_on(_route(path, "GET"), get_current_identity))
 

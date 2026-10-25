@@ -148,8 +148,9 @@ export const api = {
       headers: withAuth(token),
     }),
 
-  listAllAppointments: (token: string) =>
-    request<AppointmentRow[]>("/appointments/all", {
+  /** The caller's appointments; includeCancelled also lists cancelled ones (status CANCELLED). */
+  listAllAppointments: (token: string, includeCancelled = false) =>
+    request<AppointmentRow[]>(`/appointments/all${includeCancelled ? "?include_cancelled=true" : ""}`, {
       method: "GET",
       headers: withAuth(token),
     }),
@@ -173,14 +174,9 @@ export const api = {
       headers: withAuth(token),
     }),
 
-  doctorWeeklyAppointments: (token: string, fromDate?: string) =>
-    request<DoctorAppointmentRow[]>(`/doctor/appointments${fromDate ? `?from_date=${fromDate}` : ""}`, {
-      method: "GET",
-      headers: withAuth(token),
-    }),
-
+  /** The doctor's appointments in the clinic week containing fromDate, including cancelled ones. */
   doctorAllAppointments: (token: string, fromDate?: string) =>
-    request<DoctorAppointmentRow[]>(`/doctor/appointments/all${fromDate ? `?from_date=${fromDate}` : ""}`, {
+    request<DoctorAppointmentRow[]>(`/doctor/appointments/all?include_cancelled=true${fromDate ? `&from_date=${fromDate}` : ""}`, {
       method: "GET",
       headers: withAuth(token),
     }),
@@ -189,13 +185,6 @@ export const api = {
     request<any>("/doctors/me", {
       method: "GET",
       headers: withAuth(token),
-    }),
-
-  updateDoctorSlot: (token: string, payload: { slot: string; is_available: boolean }) =>
-    request<{ message: string }>("/doctor/availability", {
-      method: "POST",
-      headers: withAuth(token),
-      body: JSON.stringify(payload),
     }),
 
   searchPatients: (token: string, q: string) =>
@@ -230,12 +219,6 @@ export const api = {
       throw error;
     });
   },
-
-  getAllPatientPrescriptions: (token: string, patientId: string) =>
-    request<PatientSearchRow[]>(`/patients/${patientId}/prescriptions`, {
-      method: "GET",
-      headers: withAuth(token),
-    }),
 
   listAdminUsers: (token: string, page: number, pageSize: number) =>
     request<AdminUserRow[]>(`/admin/users?page=${page}&page_size=${pageSize}`, {
@@ -412,12 +395,6 @@ export const api = {
       });
     },
 
-  listDoctorAvailabilityNext30Days: (doctorId: string, token?: string) =>
-    request<Array<{ slot_time: string }>>(`/doctor/availability/${doctorId}/ndays`, {
-      method: "GET",
-      ...(token && { headers: withAuth(token) }),
-    }),
-
   listAllDoctorAvailability: (doctorId: string, token?: string) =>
     request<Array<{ slot_time: string; status: "AVAILABLE" | "BOOKED" | "BLOCKED" }>>(`/doctor/availability/${doctorId}/all?days=${30}`, {
       method: "GET",
@@ -449,12 +426,6 @@ export const api = {
       method: "PATCH",
       headers: withAuth(token),
       body: JSON.stringify({ reason }),
-    }),
-
-  listPatients: (token: string) =>
-    request<Array<{ id: string; user_id: string; name: string; phone: string }>>("/patients", {
-      method: "GET",
-      headers: withAuth(token),
     }),
 
   getSupportProfile: (token: string) =>
@@ -610,14 +581,6 @@ export const api = {
     }).catch(error => {
       debugError('API: getPharmacies error:', error);
       throw error;
-    }),
-
-  // Admin Password Reset
-  resetUserPassword: (email: string, role: string, newPassword: string, token: string) =>
-    request<{ message: string; user_email: string; user_role: string; reset_by: string }>('/admin/reset-password', {
-      method: 'POST',
-      headers: withAuth(token),
-      body: JSON.stringify({ email, role, new_password: newPassword }),
     }),
 
   adminSearchUsers: (token: string, role: string, q: string) =>

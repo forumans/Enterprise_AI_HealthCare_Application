@@ -36,7 +36,7 @@ Errors appear above each field; all errors are computed together on submit; inpu
 
 On success: `alert("Registration successful! Please log in.")`, then navigate to `/patients/login`.
 On failure: show the server's `detail` (e.g. "That email is already used by another account.") — `alert` or an
-inline error `StatusMessage` — and keep the form (see GAP-08).
+inline error `StatusMessage` — and keep the form.
 
 Request body sent: `full_name` (trimmed), `email` (trimmed), `phone` (trimmed), `password`, and, only when
 non-empty, `date_of_birth` (`YYYY-MM-DD`), `gender`, `address_line1`, `address_line2`, `city`, `state`,
@@ -65,9 +65,9 @@ non-empty, `date_of_birth` (`YYYY-MM-DD`), `gender`, `address_line1`, `address_l
 - **BR-ACC-02** User (`role=PATIENT`, `is_active=true`, PBKDF2 hash) and patient profile are created in one
   transaction.
 - **AUTH-REGP-SRV** The server SHALL enforce the same field rules as the UI: `full_name` 3–255 after trim;
-  password 8–255; email pattern; phone pattern (when the clinic requires it — reference: required); DOB not in
-  future and ≤ 120 years; gender ∈ `MALE|FEMALE|OTHER|PREFER_NOT_TO_SAY`; length limits from F02. Optional text
-  fields are trimmed and empty → NULL. (Current code only checks name and password: GAP-06.)
+  password 8–255; email pattern; phone pattern when given (the UI requires it); DOB not in the future and ≤ 120
+  years; gender ∈ `MALE|FEMALE|OTHER|PREFER_NOT_TO_SAY`, any case accepted and stored upper-case; length limits
+  from F02. Optional text fields are trimmed and empty → NULL. Violations → 422 generic message (F04 §3.2).
 - Audit: `users` INSERT `{email, role}` performed by the new user.
 
 ## 4. API — `POST /auth/register` (public)

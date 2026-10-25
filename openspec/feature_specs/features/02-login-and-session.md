@@ -28,7 +28,7 @@ register line.
 | Field | id | Type / autocomplete | Placeholder | Help tooltip | Validation (on submit) |
 |-------|----|----------------------|-------------|--------------|-----------------------|
 | Email | `email` | `email` / `email` | "your.email@example.com" | "Enter your registered email address" | `^[^\s@]+@[^\s@]+\.[^\s@]+$`; error under field "Please enter a valid email address" (shown only after a submit attempt and while the email is non-empty and invalid) |
-| Password | `password` | `password` with show/hide toggle / `current-password` | "Enter your password" | "Enter your password" | length ≥ 8, else page message "Password must be at least 8 characters." (no request sent) |
+| Password | `password` | `password` with show/hide toggle / `current-password` | "Enter your password" | "Enter your password" | none — the server decides (an older account may have a shorter password) |
 
 Submit button (class `button-primary`): "Login as Patient", "Login as Doctor", "Login as Admin",
 "Login as Support Staff". Disabled while either field is empty or the email error is showing.
@@ -88,7 +88,8 @@ Processing:
 3. `cross_tenant.login_lookup(email)` → active, non-deleted account in any tenant.
 4. If none or the password doesn't verify: record both limits; **401 "Authentication failed"**.
 5. Clear the `login-email` counter; `set_db_tenant(account.tenant_id, account.id)`.
-6. Issue the token (F03 §2); read `tenants.timezone`; for PATIENT load the non-deleted patient profile.
+6. Issue the token (F03 §2); read `tenants.timezone`; load the caller's non-deleted role profile for its
+   `full_name` (`user_name`), and for PATIENT also the insurance fields.
 
 Response 200:
 ```json
@@ -97,7 +98,7 @@ Response 200:
   "refresh_token": "",
   "role": "PATIENT",
   "tenant_id": "<uuid>",
-  "user_name": "Jane Doe",              // patients only, else null
+  "user_name": "Jane Doe",              // profile full_name for every role (null if no profile)
   "insurance_provider": "Acme Health",  // patients only, else null
   "insurance_policy_id": "P-123",       // patients only, else null
   "clinic_timezone": "America/New_York" // valid IANA key (fallback to CLINIC_TIMEZONE)
@@ -124,7 +125,7 @@ No audit entry is written for login.
 - **F02-AC-03** Given a wrong password and an unknown email, When submitted to the API, Then both get the same
   401 body "Authentication failed".
 - **F02-AC-04** Given "abc" as email, When the user submits, Then "Please enter a valid email address" appears
-  and no request is sent; given a 7-character password, Then "Password must be at least 8 characters.".
+  and no request is sent; given a 5-character password, Then the login request is sent and the server's reply is shown.
 - **F02-AC-05** Given a signed-in user whose account an admin deactivates, When they click anything that calls
   the API, Then they are on their login page with "Your session has ended. Please sign in again.".
 - **F02-AC-06** Given 3 requests failing with 401 at once, Then exactly one navigation to the login page occurs.

@@ -47,7 +47,8 @@ Buttons (equal width): **"Complete Consultation"** (primary; "Saving..." and dis
 
 ### 2.4 Save flow
 1. Client check: symptoms and diagnosis non-empty, else "Please fill in at least symptoms and diagnosis fields".
-   The client SHOULD also enforce symptoms ≥ 5 and diagnosis ≥ 3 characters (server rule; GAP-09).
+   Then, after trimming: symptoms < 5 → "Symptoms must be at least 5 characters."; diagnosis < 3 → "Diagnosis must be
+   at least 3 characters." (the server's minimums). No request is sent in these cases.
 2. `POST /medical-records {appointment_id, patient_id: <from details>, diagnosis, notes: symptoms, lab_results:
    value or null}`.
    - If the error message contains "Medical record already exists for appointment": show success text
@@ -80,7 +81,7 @@ Buttons (equal width): **"Complete Consultation"** (primary; "Saving..." and dis
 ## 4. API
 
 ### `GET /doctor/appointments/{appointment_id}` — D
-- `appointment_id == "all"` or shorter than 32 characters → **400 "Invalid appointment ID"**.
+- `appointment_id` that isn't a UUID (e.g. `all`) → **400 "Invalid appointment ID"**, before any query.
 - Caller's doctor profile (none → 404 "Doctor not found"); appointment of that doctor in the tenant, not
   soft-deleted, with a non-deleted patient, else **404 "Appointment not found"**.
 - 200 `{id, time, patient_id, patient_name, status, notes}`.

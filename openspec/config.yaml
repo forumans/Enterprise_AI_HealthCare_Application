@@ -10,7 +10,7 @@ context: |
   Auth: JWT HS256, stateless; token stored in React Context only (never localStorage)
   Multi-tenancy: tenant_id claim in JWT scopes every DB query; PostgreSQL row-level security enforces it too (migration 007)
   RBAC roles: PATIENT, DOCTOR, SUPPORT_STAFF, ADMIN — enforced via require_roles() dependency at backend
-  Requirements: openspec/specs/ (start at README.md)
+  Requirements: openspec/feature_specs/ (start at README.md; known code-vs-spec differences in GAPS.md)
   Scheduling: hourly slots 8 AM-11 PM in each clinic's own IANA zone (tenants.timezone, migration 008), times stored in UTC
   Time display: every time is shown and every booking grid laid out in the clinic's zone (sent at login), never the viewer's
   Password hashing: PBKDF2-HMAC-SHA256, 120,000 iterations, 16-byte random salt

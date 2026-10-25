@@ -9,6 +9,7 @@ from fastapi.routing import APIRoute
 
 from backend.app.core.dependencies import get_current_identity
 from backend.app.main import SERVER_ERROR_DETAIL, app, catch_unhandled_errors
+from backend.tests.route_helpers import iter_api_routes
 
 
 def _needs_identity(route: APIRoute) -> bool:
@@ -26,7 +27,7 @@ class PublicPathTests(unittest.TestCase):
         # A public (excluded) path skips token decoding, so a handler that needs the identity
         # would answer 401 even to logged-in users - which the frontend treats as "session ended".
         excluded = next(m for m in app.user_middleware if m.cls.__name__ == "TenantContextMiddleware").kwargs["excluded_paths"]
-        broken = [route.path for route in app.routes if isinstance(route, APIRoute) and route.path in excluded and _needs_identity(route)]
+        broken = [path for path, route in iter_api_routes(app) if path in excluded and _needs_identity(route)]
         self.assertEqual(broken, [])
 
     def test_doctor_list_is_not_public(self):

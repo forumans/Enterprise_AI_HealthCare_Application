@@ -14,16 +14,15 @@ from backend.app.api.routes.admin_password_reset import ChangeEmailRequest, get_
 from backend.app.main import app
 from backend.app.middleware.tenant_middleware import _as_role
 from backend.app.models import User
+from backend.tests.route_helpers import find_route
 
 
 def _allowed_roles(path: str, method: str) -> set[str] | None:
-    for route in app.router.routes:
-        if getattr(route, "path", None) == path and method in getattr(route, "methods", set()):
-            for dependency in route.dependant.dependencies:
-                if dependency.call.__name__ == "_checker":
-                    return set(inspect.getclosurevars(dependency.call).nonlocals["normalized_roles"])
-            return None  # route has no role guard
-    raise AssertionError(f"{method} {path} is not registered")
+    route = find_route(app, path, method)
+    for dependency in route.dependant.dependencies:
+        if dependency.call.__name__ == "_checker":
+            return set(inspect.getclosurevars(dependency.call).nonlocals["normalized_roles"])
+    return None  # route has no role guard
 
 
 class RoleAccessTests(unittest.TestCase):

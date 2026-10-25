@@ -28,6 +28,8 @@
 param(
     [string[]]$MigrationFiles = @(),
     [switch]$Preflight,
+    # Read-only: save a JSON snapshot of the RDS public schema (schema_snapshot.sql) to this file
+    [string]$SchemaSnapshot,
     [string]$DbInstanceId = "healthcare-db",
     [string]$MasterUser = "postgres"
 )
@@ -40,7 +42,8 @@ $FunctionName = "healthcare-migration-runner-temp"
 $RoleName = "healthcare-migration-runner-temp-role"
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)  # PS 5.1's "utf8" adds a BOM that Lambda rejects
 
-if (-not $Preflight -and $MigrationFiles.Count -eq 0) { throw "Pass -MigrationFiles <file.sql> [...] (or -Preflight)." }
+if ($SchemaSnapshot) { $Preflight = $true }  # same read-only app-user connection
+if (-not $Preflight -and $MigrationFiles.Count -eq 0) { throw "Pass -MigrationFiles <file.sql> [...] (or -Preflight / -SchemaSnapshot <out.json>)." }
 foreach ($file in $MigrationFiles) {
     if (-not (Test-Path $file)) { throw "Migration file not found: $file" }
 }
@@ -86,8 +89,10 @@ def handler(event, context):
         try:
             roles, has_staff_table, who = conn.execute(SCHEMA_FACTS).fetchone()
             no_access = sorted(name for name, ok in conn.execute(APP_ACCESS).fetchall() if not ok)
+            snapshot = conn.execute(event["snapshot_sql"]).fetchone()[0] if event.get("snapshot_sql") else None
             return {"preflight": True, "connected_as": who, "user_role_values": roles,
-                    "support_staff_table": has_staff_table, "tables_without_full_access": no_access}
+                    "support_staff_table": has_staff_table, "tables_without_full_access": no_access,
+                    "schema_snapshot": snapshot}
         finally:
             conn.close()
 
@@ -149,6 +154,7 @@ try {
 
     if ($Preflight) {
         $Payload = @{ preflight = $true; host = $DbHost; app_db_url = $AppDbUrl }
+        if ($SchemaSnapshot) { $Payload.snapshot_sql = [IO.File]::ReadAllText((Join-Path $ScriptDir "schema_snapshot.sql")) }
     } else {
         $Secure = Read-Host -AsSecureString "Password for RDS master user '$MasterUser' (hidden)"
         $Plain = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($Secure))
@@ -173,6 +179,10 @@ try {
     if ($Out.errorMessage) { throw "Runner failed: $($Out.errorType): $($Out.errorMessage)" }
     if ($Preflight) {
         Write-Host "Preflight OK: connected as $($Out.connected_as); user_role = $($Out.user_role_values -join ', '); support_staff table exists = $($Out.support_staff_table)" -ForegroundColor Green
+        if ($SchemaSnapshot) {
+            [IO.File]::WriteAllText($SchemaSnapshot, $Out.schema_snapshot, $Utf8NoBom)
+            Write-Host "Schema snapshot saved to $SchemaSnapshot"
+        }
         $NoAccess = @($Out.tables_without_full_access)
         Write-Host ("Tables $($Out.connected_as) can't fully read/write: " + $(if ($NoAccess.Count) { $NoAccess -join ', ' } else { "none" }))
     } else {

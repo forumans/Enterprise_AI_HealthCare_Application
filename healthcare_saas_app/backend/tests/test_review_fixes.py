@@ -27,6 +27,7 @@ from backend.app.core.security import (
 )
 from backend.app.main import app
 from backend.app.middleware.tenant_middleware import decode_jwt_claims
+from backend.tests.route_helpers import find_route, iter_api_routes
 
 APP_ROOT = Path(__file__).resolve().parents[2]  # healthcare_saas_app/
 BACKEND_APP = APP_ROOT / "backend" / "app"
@@ -34,7 +35,7 @@ FRONTEND_SRC = APP_ROOT / "frontend" / "src"
 
 
 def _route(path: str, method: str) -> APIRoute:
-    return next(r for r in app.routes if isinstance(r, APIRoute) and r.path == path and method in r.methods)
+    return find_route(app, path, method)
 
 
 def _depends_on(route: APIRoute, dependency) -> bool:
@@ -81,7 +82,7 @@ class NoPersonalDataInLogsTests(unittest.TestCase):
 
 class RouteTableTests(unittest.TestCase):
     def test_every_method_and_path_has_exactly_one_handler(self):
-        served = Counter((method, route.path) for route in app.routes if isinstance(route, APIRoute) for method in route.methods)
+        served = Counter((method, path) for path, route in iter_api_routes(app) for method in route.methods)
         self.assertEqual([op for op, count in served.items() if count > 1], [])
 
     def test_patient_search_is_served_by_the_patients_router(self):

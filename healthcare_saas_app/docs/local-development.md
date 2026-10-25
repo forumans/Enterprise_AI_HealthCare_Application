@@ -44,6 +44,10 @@ source .venv/bin/activate
 pip install -r healthcare_saas_app/backend/requirements.txt
 ```
 
+`requirements.txt` pins **exact** versions - the same ones the AWS Lambda runs - so local, the tests
+and AWS behave the same. Install into the project's `.venv`, not your system Python: other tools on
+the machine share the system interpreter and can need different versions (e.g. `click`).
+
 ---
 
 ## 4. Set Up a Local PostgreSQL Database
@@ -89,9 +93,14 @@ APP_ENV=dev
 ## 6. Run the Backend
 
 ```bash
+# Activate the project's .venv first (step 2) - otherwise "uvicorn" may be the system Python's,
+# running different package versions than AWS
 cd healthcare_saas_app/backend
 uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
+
+To make sure you're on the venv: `python -c "import sys, sqlalchemy; print(sys.executable, sqlalchemy.__version__)"`
+should print a path inside `.venv` and the version pinned in `requirements.txt`.
 
 The backend starts at `http://127.0.0.1:8000`.
 
@@ -257,3 +266,20 @@ Document uploads will fail locally unless you set a real S3 bucket name and have
 Lambda's system clock runs in UTC. Any code that calls `datetime.now()` without a timezone returns your machine's local time locally but UTC on Lambda. If a time comparison behaves differently between environments, check that the code uses `datetime.now(timezone.utc)` rather than bare `datetime.now()`.
 
 See the [Datetime and Timezone Convention](architecture.md#datetime-and-timezone-convention) section in the architecture guide for the full set of rules.
+
+---
+
+## Keeping local and AWS aligned
+
+| Layer | How it stays aligned | How to check |
+|---|---|---|
+| Code | Deploy from a clean `master` with `aws_env_spin_up/scripts/deploy-update.ps1` | `git status` clean and `HEAD` = `origin/master` |
+| Python packages | Exact pins in `backend/requirements.txt` (SAM builds the Lambda from it) | `pip install -r requirements.txt` in `.venv`; run the tests |
+| Database schema | Run every migration on both: locally with `psql`/pgAdmin as `postgres`, on AWS with `run-migration.ps1` | `run-migration.ps1 -SchemaSnapshot <file>` then `python compare_schema.py <file>` (both in `aws_env_spin_up/scripts`) |
+| Frontend | `deploy-update.ps1` builds from the same lockfile and `.env.production` | Build locally and compare `dist/` with the files CloudFront serves |
+
+Differences that are expected and fine: `DATABASE_URL`, `JWT_SECRET`, `CORS_ORIGINS`, `APP_ENV`, `HOST`/`PORT`
+(local-only), the data itself, and the database `TimeZone` setting (AWS `UTC`, local `America/New_York` -
+every timestamp column is `timestamptz` and the backend binds aware datetimes, so it only changes how
+tools like pgAdmin display times). Document uploads need `S3_BUCKET_NAME`, which only AWS sets, so
+`POST /api/documents` and `/api/patient/documents` fail locally (no screen uses them yet).

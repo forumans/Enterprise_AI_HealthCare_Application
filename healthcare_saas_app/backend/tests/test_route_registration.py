@@ -1,19 +1,12 @@
 import unittest
 from collections import Counter
 
-from starlette.routing import Match
-
 from backend.app.main import app
+from backend.tests.route_helpers import handler_for
 
 
 def _handler_for(path: str, method: str = "GET") -> str | None:
-    scope = {"type": "http", "path": path, "method": method, "root_path": ""}
-    for route in app.router.routes:
-        match, child = route.matches(scope)
-        if match == Match.FULL:
-            endpoint = child.get("endpoint") or getattr(route, "endpoint", None)
-            return getattr(endpoint, "__name__", None)
-    return None
+    return handler_for(app, path, method)
 
 
 class RouteRegistrationTests(unittest.TestCase):

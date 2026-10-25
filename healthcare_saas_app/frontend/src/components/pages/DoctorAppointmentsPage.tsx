@@ -6,7 +6,11 @@
 
 import React, { useState, useEffect } from "react";
 import { api } from "../../api";
-import { parseServerDate } from "../../utils";
+import { useClinicTimeZone } from "../../contexts/ClinicTimeZoneContext";
+import {
+  type CalendarDay, addDays, clinicToday, dayKey, formatDay, formatInZone, mondayOf, parseServerDate, sameDay, zonedParts,
+} from "../../utils";
+import { ClinicTimeNote } from "../common/ClinicTimeNote";
 import type { SessionState, DoctorAppointmentRow } from "../../types/app";
 import { RescheduleAppointmentModal, type RescheduleTarget } from "../common/RescheduleAppointmentModal";
 
@@ -77,14 +81,9 @@ function DoctorDetails({ session, style }: { session: SessionState; style?: Reac
 export function DoctorAppointmentsPage({ auth, appointments }: DoctorAppointmentsPageProps) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [currentWeekStart, setCurrentWeekStart] = useState(() => {
-    const today = new Date();
-    const dayOfWeek = today.getDay();
-    const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek; // Sunday=0, Monday=1
-    const monday = new Date(today);
-    monday.setDate(today.getDate() + mondayOffset);
-    return monday;
-  });
+  const timeZone = useClinicTimeZone();
+  // Monday of the displayed clinic week (clinic time)
+  const [currentWeekStart, setCurrentWeekStart] = useState<CalendarDay>(() => mondayOf(clinicToday(timeZone)));
   const [selectedPatient, setSelectedPatient] = useState<DoctorAppointmentRow | null>(null);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [rescheduleTarget, setRescheduleTarget] = useState<RescheduleTarget | null>(null);
@@ -92,10 +91,9 @@ export function DoctorAppointmentsPage({ auth, appointments }: DoctorAppointment
 
   // Load the displayed week's appointments (Monday passed as MM/DD/YYYY)
   const reloadWeek = async () => {
-    const month = String(currentWeekStart.getMonth() + 1).padStart(2, '0');
-    const day = String(currentWeekStart.getDate()).padStart(2, '0');
-    const year = currentWeekStart.getFullYear();
-    await appointments.loadDoctorData(`${month}/${day}/${year}`);
+    const month = String(currentWeekStart.month).padStart(2, '0');
+    const day = String(currentWeekStart.day).padStart(2, '0');
+    await appointments.loadDoctorData(`${month}/${day}/${currentWeekStart.year}`);
   };
 
   // Load appointments when component mounts or week changes
@@ -107,45 +105,26 @@ export function DoctorAppointmentsPage({ auth, appointments }: DoctorAppointment
     };
     
     loadData();
-  }, [currentWeekStart]);
+  }, [dayKey(currentWeekStart)]);
   
-  // Generate calendar days (Sunday to Saturday)
-  const generateCalendarDays = () => {
-    const days = [];
-    for (let i = 0; i < 7; i++) {
-      const date = new Date(currentWeekStart);
-      date.setDate(currentWeekStart.getDate() + i);
-      days.push(date);
-    }
-    return days;
-  };
-  
-  const calendarDays = generateCalendarDays();
+  // Calendar days of the clinic week (Monday to Sunday)
+  const calendarDays = Array.from({ length: 7 }, (_, i) => addDays(currentWeekStart, i));
+  const today = clinicToday(timeZone);
   
   // Navigate weeks
   const navigateWeek = (direction: 'prev' | 'next') => {
-    const newStart = new Date(currentWeekStart);
-    newStart.setDate(currentWeekStart.getDate() + (direction === 'next' ? 7 : -7));
-    
-    setCurrentWeekStart(newStart);
+    setCurrentWeekStart(addDays(currentWeekStart, direction === 'next' ? 7 : -7));
     setSelectedPatient(null);
   };
   
-  // Group appointments by date and time
-  const getAppointmentsForDate = (date: Date) => {
-    return appointments.doctorAppointments.filter((apt: DoctorAppointmentRow) => {
-      const aptDate = parseServerDate(apt.time);
-      return aptDate.getFullYear() === date.getFullYear() &&
-        aptDate.getMonth() === date.getMonth() &&
-        aptDate.getDate() === date.getDate();
-    });
+  // Group appointments by their clinic-time date
+  const getAppointmentsForDate = (date: CalendarDay) => {
+    return appointments.doctorAppointments.filter((apt: DoctorAppointmentRow) => sameDay(zonedParts(parseServerDate(apt.time), timeZone), date));
   };
 
-  // Format time for display
-  const formatTime = (timeStr: string) => {
-    const date = parseServerDate(timeStr);
-    return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
-  };
+  // Format time for display (clinic time)
+  const formatTime = (timeStr: string) =>
+    formatInZone(timeStr, timeZone, { hour: '2-digit', minute: '2-digit', hour12: true });
   
   // Handle patient click
   const handlePatientClick = (appointment: DoctorAppointmentRow) => {
@@ -230,18 +209,9 @@ export function DoctorAppointmentsPage({ auth, appointments }: DoctorAppointment
             <div>
               <strong style={{ color: '#42b5f5', fontSize: '12px', textTransform: 'uppercase' }}>Date/Time:</strong>
               <p style={{ margin: '4px 0 0 0', color: '#eef8ff', fontSize: '14px' }}>
-                {(() => {
-                  const date = parseServerDate(selectedPatient.time);
-                  const month = String(date.getMonth() + 1).padStart(2, '0');
-                  const day = String(date.getDate()).padStart(2, '0');
-                  const year = date.getFullYear();
-                  const hours = date.getHours();
-                  const minutes = String(date.getMinutes()).padStart(2, '0');
-
-                  const formattedTime = `${hours % 12 === 0 ? 12 : hours % 12}:${minutes} ${hours >= 12 ? 'PM' : 'AM'}`;
-
-                  return `${month}/${day}/${year} ${formattedTime}`;
-                })()}
+                {formatInZone(selectedPatient.time, timeZone, {
+                  month: '2-digit', day: '2-digit', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short'
+                })}
               </p>
             </div>
             <div>
@@ -274,9 +244,10 @@ export function DoctorAppointmentsPage({ auth, appointments }: DoctorAppointment
           >
             ← Previous Week
           </button>
-          <h3 style={{ margin: 0, color: '#eaf5ff' }}>
-            {calendarDays[0].toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} - 
-            {calendarDays[6].toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+          <h3 style={{ margin: 0, color: '#eaf5ff', textAlign: 'center' }}>
+            {formatDay(calendarDays[0], { month: 'short', day: 'numeric', year: 'numeric' })} - 
+            {formatDay(calendarDays[6], { month: 'short', day: 'numeric', year: 'numeric' })}
+            <ClinicTimeNote />
           </h3>
           <button 
             onClick={() => navigateWeek('next')}
@@ -304,7 +275,7 @@ export function DoctorAppointmentsPage({ auth, appointments }: DoctorAppointment
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '10px', minHeight: '400px' }}>
             {calendarDays.map((date, index) => {
               const dayAppointments = getAppointmentsForDate(date);
-              const isToday = date.toDateString() === new Date().toDateString();
+              const isToday = sameDay(date, today);
               
               return (
                 <div 
@@ -322,7 +293,7 @@ export function DoctorAppointmentsPage({ auth, appointments }: DoctorAppointment
                     color: isToday ? '#42b5f5' : '#eaf5ff',
                     fontSize: '14px'
                   }}>
-                    {date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                    {formatDay(date, { weekday: 'short', month: 'short', day: 'numeric' })}
                   </h4>
                   <div style={{ fontSize: '12px' }}>
                     {dayAppointments.length === 0 ? (

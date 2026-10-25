@@ -40,6 +40,7 @@ export const submenuMap: SubmenuMap = {
     { to: "/admin/register-support-staff", label: "Register Support Staff", requiresAuth: true, role: "ADMIN" },
     { to: "/admin/reset-password", label: "Reset Password / Email", requiresAuth: true, role: "ADMIN" },
     { to: "/admin/deactivate", label: "Deactivate", requiresAuth: true, role: "ADMIN" },
+    { to: "/admin/clinic-settings", label: "Clinic Settings", requiresAuth: true, role: "ADMIN" },
   ],
 };
 

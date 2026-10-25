@@ -7,7 +7,12 @@
 import React, { useState, useEffect } from "react";
 import { api } from "../../api";
 import { useAuthContext } from "../../contexts/AuthContext";
-import { OFFICE_HOUR_SLOTS, parseErrorMessage, parseServerDate } from "../../utils";
+import { useClinicTimeZone } from "../../contexts/ClinicTimeZoneContext";
+import {
+  OFFICE_HOUR_SLOTS, addDays, cellKey, clinicSlotKey, clinicToday, dayKey, parseErrorMessage,
+  parseServerDate, sameDay, weekdayOf, zonedParts, zonedTimeToDate,
+} from "../../utils";
+import { ClinicTimeNote } from "../common/ClinicTimeNote";
 import type { SessionState } from "../../types/app";
 
 export interface AvailabilityDoctor {
@@ -78,6 +83,7 @@ export function ManageAvailabilityPage({ auth, doctor }: ManageAvailabilityPageP
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState<"success" | "error" | "">("");
   const [currentDoctor, setCurrentDoctor] = useState<any>(null);
+  const timeZone = useClinicTimeZone();
 
   useEffect(() => {
     if (message && messageType === "success") {
@@ -120,24 +126,23 @@ export function ManageAvailabilityPage({ auth, doctor }: ManageAvailabilityPageP
     }
   }
 
-  // Generate calendar similar to PatientAppointmentsPanel
-  const today = new Date();
-  const weekDays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  // Seven clinic-calendar days starting today (clinic time), moved by weekOffset
+  const now = new Date();
+  const today = clinicToday(timeZone, now);
+  const currentHour = zonedParts(now, timeZone).hour;
+  const weekDays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   const calendar: Array<{ day: string; date: number; month: number; year: number; isWeekend: boolean; isPast: boolean }> = [];
-  let offset = weekOffset * 7;
-  const startOfWeek = new Date(today);
-  startOfWeek.setDate(today.getDate() - today.getDay() + 1 + offset);
 
   for (let i = 0; i < 7; i++) {
-    const current = new Date(startOfWeek);
-    current.setDate(startOfWeek.getDate() + i);
+    const current = addDays(today, weekOffset * 7 + i);
+    const weekday = weekdayOf(current);
     calendar.push({
-      day: weekDays[i],
-      date: current.getDate(),
-      month: current.getMonth() + 1,
-      year: current.getFullYear(),
-      isWeekend: i >= 5,  // Saturday=5, Sunday=6
-      isPast: current < today && current.toDateString() !== today.toDateString()
+      day: weekDays[weekday],
+      date: current.day,
+      month: current.month,
+      year: current.year,
+      isWeekend: weekday === 0 || weekday === 6,
+      isPast: dayKey(current) < dayKey(today)
     });
   }
 
@@ -150,18 +155,13 @@ export function ManageAvailabilityPage({ auth, doctor }: ManageAvailabilityPageP
     if (period === "PM" && hour !== 12) hour += 12;
     if (period === "AM" && hour === 12) hour = 0;
     
-    // Build the UTC ISO string the backend expects
-    const localDateTime = new Date(year, month - 1, date, hour, 0, 0);
-    const utcSlotString = localDateTime.toISOString();
+    // Build the UTC ISO string the backend expects from the clinic-time cell
+    const day = { year, month, day: date };
+    const utcSlotString = zonedTimeToDate(day, hour, timeZone).toISOString();
 
-    // Local time string used only for matching calendar cells against stored UTC slot times
-    const localTimeString = `${year.toString().padStart(4, '0')}-${(month).toString().padStart(2, '0')}-${date.toString().padStart(2, '0')}T${hour.toString().padStart(2, '0')}:00:00`;
-
-    const existingSlot = availability.find(a => {
-      const slotTime = parseServerDate(a.slot_time);
-      const slotTimeString = `${slotTime.getFullYear().toString().padStart(4, '0')}-${(slotTime.getMonth() + 1).toString().padStart(2, '0')}-${slotTime.getDate().toString().padStart(2, '0')}T${slotTime.getHours().toString().padStart(2, '0')}:00:00`;
-      return slotTimeString === localTimeString;
-    });
+    // Clinic-time key used only for matching calendar cells against stored UTC slot times
+    const cellTimeString = cellKey(day, hour);
+    const existingSlot = availability.find(a => clinicSlotKey(parseServerDate(a.slot_time), timeZone) === cellTimeString);
     
     try {
       if (existingSlot?.status === "BLOCKED") {
@@ -236,8 +236,9 @@ export function ManageAvailabilityPage({ auth, doctor }: ManageAvailabilityPageP
           >
             Previous Week
           </button>
-          <span style={{ fontSize: '16px', fontWeight: '500', color: '#eef8ff' }}>
+          <span style={{ fontSize: '16px', fontWeight: '500', color: '#eef8ff', textAlign: 'center' }}>
             Week of {calendar[0]?.month}/{calendar[0]?.date} - {calendar[6]?.month}/{calendar[6]?.date}
+            <ClinicTimeNote />
           </span>
           <button 
             onClick={() => setWeekOffset(weekOffset + 1)}
@@ -294,12 +295,12 @@ export function ManageAvailabilityPage({ auth, doctor }: ManageAvailabilityPageP
                 <tr key={slot}>
                   <td style={{ padding: '8px', textAlign: 'center', fontWeight: 'bold', minWidth: '80px', backgroundColor: '#1e293b', color: '#eef8ff' }}>{slot}</td>
                   {calendar.map((col, colIdx) => {
-                    const isSlotPast = col.isPast || (col.date === today.getDate() && col.month === today.getMonth() + 1 && col.year === today.getFullYear() && (() => {
+                    const isSlotPast = col.isPast || (sameDay({ year: col.year, month: col.month, day: col.date }, today) && (() => {
                       const [time, period] = slot.split(" ");
                       let hour = parseInt(time);
                       if (period === "PM" && hour !== 12) hour += 12;
                       if (period === "AM" && hour === 12) hour = 0;
-                      return hour <= today.getHours();
+                      return hour <= currentHour;
                     })());
                     
                     const isoString = `${col.year.toString().padStart(4, '0')}-${(col.month).toString().padStart(2, '0')}-${col.date.toString().padStart(2, '0')}T${(() => {
@@ -310,11 +311,7 @@ export function ManageAvailabilityPage({ auth, doctor }: ManageAvailabilityPageP
                       return hour.toString().padStart(2, '0');
                     })()}:00:00`;
                     
-                    const slotAvailability = availability.find(a => {
-                      const slotTime = parseServerDate(a.slot_time);
-                      const slotTimeString = `${slotTime.getFullYear().toString().padStart(4, '0')}-${(slotTime.getMonth() + 1).toString().padStart(2, '0')}-${slotTime.getDate().toString().padStart(2, '0')}T${slotTime.getHours().toString().padStart(2, '0')}:00:00`;
-                      return slotTimeString === isoString;
-                    });
+                    const slotAvailability = availability.find(a => clinicSlotKey(parseServerDate(a.slot_time), timeZone) === isoString);
                     const status = slotAvailability?.status || "EMPTY";
                     
                     return (

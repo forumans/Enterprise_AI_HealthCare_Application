@@ -62,8 +62,6 @@ class HardeningTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         require_pg()
         rate_limit.reset_all()
-        self._tz_patch = patch.object(timeutils, "CLINIC_TZ", NY)
-        self._tz_patch.start()
         self.db = await TempDatabase().create(migrate=True)
         conn = await self.db.connect()
         try:
@@ -90,10 +88,9 @@ class HardeningTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         await self.engine.dispose()
         await self.db.drop()
-        self._tz_patch.stop()
 
     def identity(self, who: str, role: str):
-        return SimpleNamespace(user_id=self.ids[f"{who}_user"], tenant_id=self.ids["tenant"], role=role)
+        return SimpleNamespace(user_id=self.ids[f"{who}_user"], tenant_id=self.ids["tenant"], role=role, clinic_tz=NY)
 
     async def fetchval(self, sql: str, *args):
         conn = await self.db.connect()
@@ -104,8 +101,8 @@ class HardeningTests(unittest.IsolatedAsyncioTestCase):
 
     async def book(self, who: str, hour: int, day_offset: int = 2, doctor: str = "doctor") -> str:
         async with self.sessions() as s:
-            await ensure_default_slots(s, (await s.execute(select(Doctor).where(Doctor.id == self.ids[doctor]))).scalar_one())
-        slot = local(timeutils.clinic_today() + timedelta(days=day_offset), hour)
+            await ensure_default_slots(s, (await s.execute(select(Doctor).where(Doctor.id == self.ids[doctor]))).scalar_one(), NY)
+        slot = local(timeutils.clinic_today(NY) + timedelta(days=day_offset), hour)
         payload = CreateAppointmentRequest(doctor_id=self.ids[doctor], slot=slot.isoformat(), reason="Regular checkup")
         async with self.sessions() as s:
             return (await create_appointment(payload=payload, identity=self.identity(who, "PATIENT"), db=s))["id"]
@@ -292,7 +289,7 @@ class HardeningTests(unittest.IsolatedAsyncioTestCase):
                 await self.expect_status(400, upsert_availability(
                     doctor_id=self.ids["doctor"], payload=UpsertAvailabilityRequest(slot_time=when.isoformat(), is_available=False), identity=doctor, db=s,
                 ))
-        soon = local(timeutils.clinic_today() + timedelta(days=3), 9)
+        soon = local(timeutils.clinic_today(NY) + timedelta(days=3), 9)
         async with self.sessions() as s:
             await upsert_availability(
                 doctor_id=self.ids["doctor"], payload=UpsertAvailabilityRequest(slot_time=soon.isoformat(), is_available=False), identity=doctor, db=s,

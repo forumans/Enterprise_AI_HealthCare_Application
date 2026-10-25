@@ -165,21 +165,20 @@ Every database table (except `tenants`) has a `tenant_id` column. All queries ar
 
 ## Datetime and Timezone Convention
 
-All datetimes in the system are stored and compared in **UTC**. This is critical because AWS Lambda's system clock runs in UTC, so any code that uses `datetime.now()` without an explicit timezone produces UTC on Lambda but local time on a developer's machine — causing silent comparison bugs.
+All instants are stored and exchanged in **UTC**; all *calendar* logic (office hours, "today", weeks) happens in the **clinic's own time zone**. Every clinic (tenant) has an IANA zone in `tenants.timezone` (migration 008), so clinics anywhere in the world share one deployment. AWS Lambda's clock runs in UTC and a developer's machine doesn't, so code never relies on the process's local zone.
 
 ### Rules
 
 | Layer | Rule |
 |---|---|
-| Backend (Python) | Always use `datetime.now(timezone.utc).replace(tzinfo=None)` for "now". Never use `datetime.now()` or `datetime.utcnow()`. |
-| Backend (parsing) | Parse incoming ISO strings with `datetime.fromisoformat(s.replace('Z', '+00:00'))`, then convert to UTC-naive via `.astimezone(timezone.utc).replace(tzinfo=None)`. |
-| Database | Stores UTC-naive datetimes. No timezone column — UTC is the implicit contract. |
-| Frontend (sending) | Slot times are sent as UTC ISO strings using `new Date(...).toISOString()` (e.g. `2026-04-28T19:00:00.000Z`). |
-| Frontend (receiving) | Stored slot times returned from the API are UTC-naive strings. Append `Z` before passing to `new Date()` so the browser converts to local time correctly: `new Date(slotTime + 'Z')`. |
+| Database | Every timestamp column is `timestamptz` (migration 003) holding UTC. `tenants.timezone` holds the clinic's zone. |
+| Backend "now" | `timeutils.utc_now()` (aware UTC). Never `datetime.now()` or `datetime.utcnow()`; never bind a naive datetime. |
+| Backend parsing | `timeutils.parse_client_datetime()` turns any ISO string (with or without offset; naive means UTC) into aware UTC. |
+| Backend clinic calendar | `clinic_today(tz)`, `clinic_day_bounds(day, tz)`, `clinic_week_bounds(day, tz)`, `default_slot_times(tz)` all take the zone explicitly. Routes pass `identity.clinic_tz`, which `get_current_identity` loads with the account check (no extra query). |
+| API responses | ISO-8601 with offset (`+00:00`). Login also returns `clinic_timezone`. |
+| Frontend | Shows every time and lays out every grid in the clinic's zone (`useClinicTimeZone()`), never the browser's. Calendar days are `{year, month, day}` values; grid cells are clinic wall-clock keys (`clinicSlotKey` / `slotKeyToDate`), and instants go to the API as `toISOString()`. Helpers live in `src/utils/index.ts` and use only `Intl`. Every calendar shows the zone under its heading with `<ClinicTimeNote />`. |
 
-### Why naive UTC (not timezone-aware)?
-
-SQLAlchemy's `DateTime` column (without `timezone=True`) stores and returns naive datetimes. Keeping everything as UTC-naive avoids SQLAlchemy/asyncpg timezone coercion surprises while still being unambiguous — as long as the UTC convention is consistently applied.
+Frontend tests run with `TZ=Asia/Tokyo` (`vitest.config.ts`), a zone unlike any test clinic's, so code that slips back to the browser's zone fails.
 
 ---
 

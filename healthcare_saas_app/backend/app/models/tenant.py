@@ -18,4 +18,6 @@ class Tenant(Base):
     id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, server_default=text("uuid_generate_v4()"))
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     domain: Mapped[Optional[str]] = mapped_column(String(255), unique=True)
+    # IANA zone of the clinic's office hours and calendar (migration 008)
+    timezone: Mapped[str] = mapped_column(String(64), nullable=False, server_default=text("'America/New_York'"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"), nullable=False)

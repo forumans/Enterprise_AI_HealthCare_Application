@@ -21,9 +21,12 @@ describe("AdminSetupPage", () => {
     await userEvent.type(screen.getByLabelText(/^Email/, { selector: "input" }), "ada@clinic.test");
     await userEvent.type(screen.getByLabelText(/^Password/, { selector: "input" }), "Str0ngPass");
     await userEvent.type(screen.getByLabelText(/Confirm Password/, { selector: "input" }), "Str0ngPass");
+    // The clinic zone starts as the browser's (Tokyo in tests) and can be changed
+    expect(screen.getByLabelText("Clinic Time Zone")).toHaveValue("Asia/Tokyo");
+    await userEvent.selectOptions(screen.getByLabelText("Clinic Time Zone"), "America/Chicago");
     await userEvent.click(screen.getByRole("button", { name: "Create Administrator" }));
 
-    expect(api.bootstrapAdmin).toHaveBeenCalledWith({ full_name: "Ada Admin", email: "ada@clinic.test", password: "Str0ngPass" });
+    expect(api.bootstrapAdmin).toHaveBeenCalledWith({ full_name: "Ada Admin", email: "ada@clinic.test", password: "Str0ngPass", timezone: "America/Chicago" });
     expect(await screen.findByText("Admin registration successful for Ada Admin")).toBeInTheDocument();
   });
 

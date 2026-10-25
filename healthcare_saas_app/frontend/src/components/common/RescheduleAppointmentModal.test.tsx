@@ -3,14 +3,17 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RescheduleAppointmentModal } from "./RescheduleAppointmentModal";
 import { api } from "../../api";
+import { ClinicTimeZoneContext } from "../../contexts/ClinicTimeZoneContext";
+import { addDays, clinicToday, zonedTimeToDate } from "../../utils";
 
 vi.mock("../../api", () => ({
   api: { listAllDoctorAvailability: vi.fn(), rescheduleAppointment: vi.fn() },
 }));
 
-// Slots are built in the machine's local time, like the calendar grid, for tomorrow (always in the first week shown)
-const now = new Date();
-const tomorrowAt = (hour: number) => new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, hour);
+// The clinic is in Los Angeles; the test runner's own zone is Tokyo. Slots are tomorrow in clinic time
+// (always in the first week shown), and the grid must show them at their Los Angeles hours.
+const CLINIC_ZONE = "America/Los_Angeles";
+const tomorrowAt = (hour: number) => zonedTimeToDate(addDays(clinicToday(CLINIC_ZONE), 1), hour, CLINIC_ZONE);
 const iso = (hour: number) => tomorrowAt(hour).toISOString();
 
 const target = {
@@ -22,6 +25,9 @@ const target = {
   reason: "Knee pain review",
   status: "CONFIRMED",
 };
+
+const renderInClinic = (ui: React.ReactElement) =>
+  render(<ClinicTimeZoneContext.Provider value={CLINIC_ZONE}>{ui}</ClinicTimeZoneContext.Provider>);
 
 /** The calendar column for tomorrow (the grid starts today). */
 async function tomorrowColumn() {
@@ -41,7 +47,7 @@ describe("RescheduleAppointmentModal", () => {
   });
 
   it("shows the appointment details that stay the same", async () => {
-    render(<RescheduleAppointmentModal target={target} accessToken="tok" onClose={vi.fn()} onRescheduled={vi.fn()} />);
+    renderInClinic(<RescheduleAppointmentModal target={target} accessToken="tok" onClose={vi.fn()} onRescheduled={vi.fn()} />);
     const dialog = screen.getByRole("dialog");
     for (const text of ["Steve Works", "Dr One", "CONFIRMED", "Knee pain review"]) {
       expect(within(dialog).getByText(text)).toBeInTheDocument();
@@ -51,11 +57,13 @@ describe("RescheduleAppointmentModal", () => {
   });
 
   it("only lets open future slots be picked", async () => {
-    render(
+    renderInClinic(
       <RescheduleAppointmentModal target={target} accessToken="tok" onClose={vi.fn()} onRescheduled={vi.fn()} conflictingTimes={[iso(13)]} />
     );
     const column = await tomorrowColumn();
     expect(within(column).getByText("10:00 AM")).toHaveAttribute("title", "Current appointment time");
+    // The calendar says which zone its times are in (the clinic's, not the viewer's Tokyo)
+    expect(screen.getByTestId("clinic-time-note")).toHaveTextContent(/^All times are clinic time: P[DS]T \(America\/Los Angeles\)$/);
 
     for (const label of ["10:00 AM", "12:00 PM", "1:00 PM", "2:00 PM"]) { // current, blocked, patient's other booking, no slot
       await userEvent.click(within(column).getByText(label));
@@ -63,7 +71,7 @@ describe("RescheduleAppointmentModal", () => {
     }
 
     await userEvent.click(within(column).getByText("11:00 AM"));
-    expect(screen.getByText(/^New time:/)).toBeInTheDocument();
+    expect(screen.getByText(/^New time: .* 11:00 AM P[DS]T$/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Confirm Reschedule" })).toBeEnabled();
   });
 
@@ -72,7 +80,7 @@ describe("RescheduleAppointmentModal", () => {
     const alert = vi.spyOn(window, "alert").mockImplementation(() => {});
     const onRescheduled = vi.fn();
     const onClose = vi.fn();
-    render(<RescheduleAppointmentModal target={target} accessToken="tok" onClose={onClose} onRescheduled={onRescheduled} />);
+    renderInClinic(<RescheduleAppointmentModal target={target} accessToken="tok" onClose={onClose} onRescheduled={onRescheduled} />);
 
     await userEvent.click(within(await tomorrowColumn()).getByText("11:00 AM"));
     await userEvent.click(screen.getByRole("button", { name: "Confirm Reschedule" }));
@@ -86,7 +94,7 @@ describe("RescheduleAppointmentModal", () => {
   it("shows the server's error and stays open", async () => {
     vi.mocked(api.rescheduleAppointment).mockRejectedValue(new Error("Requested slot is not available."));
     const onClose = vi.fn();
-    render(<RescheduleAppointmentModal target={target} accessToken="tok" onClose={onClose} onRescheduled={vi.fn()} />);
+    renderInClinic(<RescheduleAppointmentModal target={target} accessToken="tok" onClose={onClose} onRescheduled={vi.fn()} />);
 
     await userEvent.click(within(await tomorrowColumn()).getByText("11:00 AM"));
     await userEvent.click(screen.getByRole("button", { name: "Confirm Reschedule" }));

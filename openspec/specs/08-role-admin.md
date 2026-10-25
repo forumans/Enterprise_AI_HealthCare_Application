@@ -16,6 +16,7 @@ log. Admins do not book or treat; they only see their own tenant.
 | Register Support Staff | `/admin/register-support-staff` | ADMIN |
 | Reset Password / Email | `/admin/reset-password` | ADMIN |
 | Deactivate | `/admin/deactivate` | ADMIN |
+| Clinic Settings | `/admin/clinic-settings` | ADMIN |
 
 - **ADM-GEN-01** Every admin page redirects to `/admin/login` if the session is missing or not ADMIN.
 - **ADM-GEN-02** Every admin endpoint requires the `ADMIN` role and scopes all reads and writes to the
@@ -106,6 +107,19 @@ error on failure.
   can't deactivate your own account; at least one admin account must always stay active; a deactivated user who
   is signed in is signed out on their next action.
 
+## 6a. Clinic Settings (`/admin/clinic-settings`, `ADM-CLINIC`)
+
+- **ADM-CLINIC-01** Heading "Clinic Settings". A card shows the clinic's name and a note that office hours,
+  schedules and every time in the app use the clinic's time zone, whatever zone a patient or staff member is in.
+- **ADM-CLINIC-02** "Clinic Time Zone" is a list of IANA zones (from the browser), preset to the clinic's
+  current zone (`GET /tenants/current`). Below it: the current time in the chosen zone and, when the admin's
+  computer is in another zone, "Your computer is set to <zone>. Use it".
+- **ADM-CLINIC-03** Choosing a different zone shows what will happen (`BR-TIME-06`). "Save Time Zone" is enabled
+  only for a different zone and asks for confirmation; it then calls `PATCH /tenants/current {timezone}`.
+- **ADM-CLINIC-04** On success the page shows "Clinic time zone set to <zone>. <n> upcoming slot(s) kept their
+  local hours." and the admin's session switches to the new zone immediately. Other signed-in users pick it up
+  at their next sign-in. An unknown zone returns 422 and changes nothing.
+
 ## 7. Soft delete and restore (API)
 
 - **ADM-DEL-01** `PATCH /admin/users/{id}/soft-delete` soft-deletes the user and profile (`BR-ACC-06`), with audit
@@ -128,6 +142,7 @@ error on failure.
 | `GET /admin/users?page=&page_size=` (1–500, default 25) | Paged non-deleted users, newest first, with profile name and active flag (one query) |
 | `GET /admin/appointments?page=&page_size=` | Paged appointments, newest first, with doctor and patient names; cancelled visits included and flagged (`status = CANCELLED`, `is_cancelled`) |
 | `GET /tenants/{id}` | The admin's own tenant only (`SEC-TEN-05`) |
+| `PATCH /tenants/current` | Change the own clinic's time zone (`ADM-CLINIC`, `BR-TIME-06`) |
 | `POST /patients`, `POST /doctors` | Attach a profile to an existing user (legacy) |
 | `PATCH /appointments/{id}/status`, `DELETE /appointments/{id}` | Correct an appointment's status or cancel it |
 
@@ -146,3 +161,6 @@ error on failure.
 - **ADM-AC-07** Dashboard appointment counts exclude future and cancelled appointments and use clinic-local
   boundaries.
 - **ADM-AC-08** An admin of tenant A cannot see, search, change or delete any user of tenant B (404 or empty).
+- **ADM-AC-09** Changing a New York clinic to `America/Los_Angeles` moves a 10 AM Eastern blocked slot to 10 AM
+  Pacific with its reason; a 2 PM Eastern booked appointment keeps its instant (11 AM Pacific); the clinic's
+  other zones and other clinics are unchanged; `Mars/Olympus_Mons` returns 422.

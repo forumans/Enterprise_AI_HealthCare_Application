@@ -9,7 +9,8 @@ import { useNavigate } from "react-router-dom";
 import { api, SESSION_ENDED_EVENT } from "../api";
 import { requireRole } from "../app/access";
 import { getMainMenuFromPath } from "../config/menu";
-import { delay, parseErrorMessage } from "../utils";
+import { DEFAULT_CLINIC_TIMEZONE, delay, parseErrorMessage } from "../utils";
+import { ClinicTimeZoneContext } from "./ClinicTimeZoneContext";
 import { DEFAULT_COUNTRY, STATUS_MESSAGE_DURATION, INITIAL_STATUS_DURATION } from "../constants";
 import type { SessionState, Role, LoginFormState, PatientRegistrationState, RegisterPayload } from "../types/app";
 
@@ -176,6 +177,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         userName: result.user_name,
         insuranceProvider: result.insurance_provider,
         insurancePolicyId: result.insurance_policy_id,
+        clinicTimezone: result.clinic_timezone,
       };
       
       debugLog("Login succeeded. Updating session state.");
@@ -286,7 +288,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   
   return (
     <AuthContext.Provider value={value}>
-      {children}
+      <ClinicTimeZoneContext.Provider value={session.clinicTimezone || DEFAULT_CLINIC_TIMEZONE}>
+        {children}
+      </ClinicTimeZoneContext.Provider>
     </AuthContext.Provider>
   );
 }

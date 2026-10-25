@@ -7,7 +7,12 @@
 
 import React, { useState, useEffect } from "react";
 import { api } from "../../api";
-import { OFFICE_HOUR_SLOTS, isAppointmentUpcoming, parseErrorMessage, parseServerDate, removeCancelledBooking } from "../../utils";
+import { useClinicTimeZone } from "../../contexts/ClinicTimeZoneContext";
+import {
+  OFFICE_HOUR_SLOTS, addDays, clinicSlotKey, clinicToday, dayKey, formatInZone, isAppointmentUpcoming,
+  parseErrorMessage, parseServerDate, removeCancelledBooking, sameDay, slotKeyToDate, weekdayOf, zonedParts,
+} from "../../utils";
+import { ClinicTimeNote } from "../common/ClinicTimeNote";
 import type { SessionState, AppointmentRow } from "../../types/app";
 import { RescheduleAppointmentModal, type RescheduleTarget } from "../common/RescheduleAppointmentModal";
 
@@ -18,6 +23,7 @@ interface PatientAppointmentsPageProps {
 }
 
 export function PatientAppointmentsPage({ auth, appointments, userData }: PatientAppointmentsPageProps) {
+  const timeZone = useClinicTimeZone();
   const [loading, setLoading] = useState(false);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [patientDetails, setPatientDetails] = useState<any>(null);
@@ -115,18 +121,17 @@ export function PatientAppointmentsPage({ auth, appointments, userData }: Patien
     ? pastAppointments
     : pastAppointments.slice(0, 5);
 
-  // Format date for display
-  const formatDate = (dateStr: string) => {
-    const date = parseServerDate(dateStr);
-    return date.toLocaleDateString('en-US', { 
-      weekday: 'long', 
-      year: 'numeric', 
-      month: 'long', 
+  // Format date for display (clinic time, with the zone)
+  const formatDate = (dateStr: string) =>
+    formatInZone(dateStr, timeZone, {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
       day: 'numeric',
       hour: '2-digit',
-      minute: '2-digit'
+      minute: '2-digit',
+      timeZoneName: 'short'
     });
-  };
 
   // Handle appointment cancellation
   const handleCancelAppointment = async (appointmentId: string) => {
@@ -150,7 +155,7 @@ export function PatientAppointmentsPage({ auth, appointments, userData }: Patien
       // Free the cancelled slot in the calendar immediately.
       const cancelledTime = cancelledAppointment?.appointment_time;
       if (cancelledTime) {
-        setBookedAppointments(prev => removeCancelledBooking(prev, cancelledTime));
+        setBookedAppointments(prev => removeCancelledBooking(prev, cancelledTime, timeZone));
       }
       
       // Also refresh the local patientAppointments state
@@ -194,26 +199,22 @@ export function PatientAppointmentsPage({ auth, appointments, userData }: Patien
     setAvailabilityRefreshKey(prev => prev + 1);
   };
 
-  // Calendar functionality
-  const today = new Date();
+  // Calendar functionality: seven clinic-calendar days from today (clinic time)
+  const today = clinicToday(timeZone, now);
   const weekDays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   const calendar: Array<{ day: string; date: number; month: number; year: number; isWeekend: boolean; isPast: boolean }> = [];
   
-  const startDate = new Date(today);
-  startDate.setDate(today.getDate() + weekOffset * 7);
   for (let i = 0; i < 7; i++) {
-    const date = new Date(startDate);
-    date.setDate(startDate.getDate() + i);
-    const dayName = weekDays[date.getDay()];
-    const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-    const isPast = date.getTime() < todayMidnight.getTime();
-    calendar.push({ day: dayName, date: date.getDate(), month: date.getMonth() + 1, year: date.getFullYear(), isWeekend: date.getDay() === 0 || date.getDay() === 6, isPast });
+    const date = addDays(today, weekOffset * 7 + i);
+    const weekday = weekdayOf(date);
+    const isPast = dayKey(date) < dayKey(today);
+    calendar.push({ day: weekDays[weekday], date: date.day, month: date.month, year: date.year, isWeekend: weekday === 0 || weekday === 6, isPast });
   }
 
   const handlePrevWeek = () => setWeekOffset(o => Math.max(0, o - 1));
   const handleNextWeek = () => setWeekOffset(o => Math.min(4, o + 1));
   const timeSlots = OFFICE_HOUR_SLOTS;
-  const currentHour = today.getHours();
+  const currentHour = zonedParts(now, timeZone).hour;
 
   const handleBookAppointment = async (isoString: string) => {
     if (!appointmentReason.trim()) {
@@ -227,8 +228,8 @@ export function PatientAppointmentsPage({ auth, appointments, userData }: Patien
     }
 
     try {
-      // isoString is a naive local-time string used for display; convert to UTC for the API
-      const utcSlot = new Date(isoString).toISOString();
+      // isoString is a clinic-time cell key; convert to UTC for the API
+      const utcSlot = slotKeyToDate(isoString, timeZone).toISOString();
       const result = await api.bookAppointment(auth.session.accessToken, {
         doctor_id: selectedDoctorId,
         slot: utcSlot,
@@ -387,8 +388,9 @@ export function PatientAppointmentsPage({ auth, appointments, userData }: Patien
                 >
                   Previous Week
                 </button>
-                <h4 style={{ margin: 0, color: '#eaf5ff' }}>
+                <h4 style={{ margin: 0, color: '#eaf5ff', textAlign: 'center' }}>
                   Week of {calendar[0]?.month}/{calendar[0]?.date} - {calendar[6]?.month}/{calendar[6]?.date}
+                  <ClinicTimeNote />
                 </h4>
                 <button
                   onClick={handleNextWeek}
@@ -441,8 +443,7 @@ export function PatientAppointmentsPage({ auth, appointments, userData }: Patien
                             const hour = parseInt(slot.split(":")[0]);
                             const isAm = slot.includes("AM");
                             const slotHour24 = isAm ? (hour === 12 ? 0 : hour) : (hour === 12 ? 12 : hour + 12);
-                            const colDate = new Date(col.year, col.month - 1, col.date);
-                            const isToday = colDate.toDateString() === today.toDateString();
+                            const isToday = sameDay({ year: col.year, month: col.month, day: col.date }, today);
                             const isSlotPast = col.isPast || (isToday && (slotHour24 <= currentHour));
 
                             // Check availability for this slot
@@ -451,18 +452,14 @@ export function PatientAppointmentsPage({ auth, appointments, userData }: Patien
                             // Check if this slot is already booked by the patient
                             const isPatientBooked = patientAppointments.some(apt => {
                               const aptTime = parseServerDate(apt.appointment_time);
-                              const slotTime = new Date(isoString);
+                              const slotTime = slotKeyToDate(isoString, timeZone);
                               const isSameTime = Math.abs(aptTime.getTime() - slotTime.getTime()) < 60000;
                               return isSameTime && (apt.status === 'SCHEDULED' || apt.status === 'CONFIRMED');
                             });
 
                             // Check if this slot is available for the selected doctor, comparing
-                            // against the calendar cell's local isoString.
-                            const slotAvailability = doctorAvailability.find(a => {
-                              const slotTime = parseServerDate(a.slot_time);
-                              const slotTimeString = `${slotTime.getFullYear().toString().padStart(4, '0')}-${(slotTime.getMonth() + 1).toString().padStart(2, '0')}-${slotTime.getDate().toString().padStart(2, '0')}T${slotTime.getHours().toString().padStart(2, '0')}:00:00`;
-                              return slotTimeString === isoString;
-                            });
+                            // against the calendar cell's clinic-time key.
+                            const slotAvailability = doctorAvailability.find(a => clinicSlotKey(parseServerDate(a.slot_time), timeZone) === isoString);
                             const isAvailable = !isPatientBooked && selectedDoctorId && slotAvailability && slotAvailability.status === "AVAILABLE";
                             
                             // Check if slot is booked
@@ -503,7 +500,7 @@ export function PatientAppointmentsPage({ auth, appointments, userData }: Patien
                 </tbody>
               </table>
 
-              <div style={{ marginTop: '16px', display: 'flex', gap: '16px', fontSize: '12px' }}>
+              <div style={{ marginTop: '16px', display: 'flex', gap: '16px', fontSize: '12px', flexWrap: 'wrap' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <div style={{ width: '12px', height: '12px', backgroundColor: '#28a745', borderRadius: '2px' }}></div>
                   <span style={{ color: '#b4cce2' }}>Available</span>

@@ -110,7 +110,9 @@ consultations, and looks up patients' clinical history within their clinic.
 - **DOC-AVAIL-01** Heading "Manage Availability" and the doctor details card. Load the doctor's own id from
   `GET /doctors/me`, then slots from `GET /doctor/availability/{id}/all` (which tops up default slots,
   `BR-SLOT-01`).
-- **DOC-AVAIL-02** Week grid starting today with "Previous Week" (disabled on the first week), "Week of M/D -
+- **DOC-AVAIL-02** Week grid of seven clinic-calendar days starting today (not the Monday of the week, so on a
+  Sunday the grid isn't six past days), with today's passed hours shown as past, the clinic time note
+  (`UI-DT-04`), and "Previous Week" (disabled on the first week), "Week of M/D -
   M/D" and "Next Week". Each day column lists the 16 hourly cells.
 - **DOC-AVAIL-03 Cell labels and actions.**
 

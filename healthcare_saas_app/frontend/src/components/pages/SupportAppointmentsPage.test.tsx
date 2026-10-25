@@ -3,6 +3,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SupportAppointmentsPage } from "./SupportAppointmentsPage";
 import { api } from "../../api";
+import { DEFAULT_CLINIC_TIMEZONE, addDays, clinicToday, zonedTimeToDate } from "../../utils";
 
 vi.mock("../../api", () => ({
   api: {
@@ -20,8 +21,8 @@ vi.mock("../../api", () => ({
 }));
 
 const auth = { session: { accessToken: "tok" } };
-const now = new Date();
-const tomorrowAt = (hour: number) => new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, hour);
+// Built in the clinic's zone (the default clinic zone: no provider), not the runner's (Tokyo)
+const tomorrowAt = (hour: number) => zonedTimeToDate(addDays(clinicToday(DEFAULT_CLINIC_TIMEZONE), 1), hour, DEFAULT_CLINIC_TIMEZONE);
 const steve = { id: "p1", name: "Steve Works", phone: "(555) 010-2030", email: "s@x.test", date_of_birth: "", gender: "", insurance_provider: "", city: "", state: "" };
 const drOne = { id: "d1", name: "Dr One", phone: "555-0100", email: "doc1@x.test", specialty: "Cardiology", license_number: "L1" };
 const upcoming = {

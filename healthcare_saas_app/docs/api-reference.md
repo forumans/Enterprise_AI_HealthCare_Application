@@ -46,6 +46,7 @@ Authentication is via `Authorization: Bearer <token>` header unless marked **Pub
   "access_token": "eyJhbGciOiJIUzI1NiJ9...",
   "role": "PATIENT | DOCTOR | ADMIN",
   "tenant_id": "uuid",
+  "clinic_timezone": "America/Chicago",
   "user_name": "Jane Smith",
   "insurance_provider": "BlueCross",
   "insurance_policy_id": "BC-12345"
@@ -534,8 +535,14 @@ Errors: `400` same email or invalid role, `404` no such user, `409` the new emai
 
 ## Tenants
 
-### GET `/api/tenants`
-**ADMIN** — List all tenants.
+### GET `/api/tenants/current`
+**Any logged-in user** — Your clinic: `{ "id", "name", "domain", "timezone" }`. `timezone` is the clinic's IANA time zone; office hours, "today", weeks and every time the UI shows use it.
+
+### PATCH `/api/tenants/current`
+**ADMIN** — Change your clinic's time zone: `{ "timezone": "America/Los_Angeles" }`. Doctors' future open and blocked slots keep their local hours (a 9 AM slot stays 9 AM); booked appointments keep their exact time, and the hour they occupied is reopened in the new zone. Returns the tenant info plus `slots_moved`. Audited. `422` for a zone the server doesn't know.
+
+### GET `/api/tenants/{tenant_id}`
+**ADMIN** — Your own clinic only (same fields as `/tenants/current`); any other id returns `404`. Clinics are created by the platform operator, not through the API.
 
 ---
 

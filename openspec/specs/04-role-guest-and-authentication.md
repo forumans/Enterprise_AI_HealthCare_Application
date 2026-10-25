@@ -32,8 +32,9 @@ all roles.
 - **AUTH-LOGIN-03** The server looks the user up by lower-cased email among non-deleted, active accounts and
   verifies the password in constant time. Unknown email, wrong password, deactivated and deleted accounts all
   return the same 401 "Authentication failed".
-- **AUTH-LOGIN-04** On success the server returns `access_token`, `role`, `tenant_id` and, for patients,
-  `user_name`, `insurance_provider`, `insurance_policy_id`. `refresh_token` is an empty string.
+- **AUTH-LOGIN-04** On success the server returns `access_token`, `role`, `tenant_id`, `clinic_timezone` (the
+  clinic's IANA zone, in which the client shows every time, `BR-TIME-04`) and, for patients, `user_name`,
+  `insurance_provider`, `insurance_policy_id`. `refresh_token` is an empty string.
 - **AUTH-LOGIN-05 Role-page check.** If the returned role differs from the login page's role, the client
   SHALL discard the token and show "Invalid credentials" (generic, so the page does not reveal which role
   the email belongs to).
@@ -102,6 +103,8 @@ all roles.
   operator; further admins of a clinic by its admins (doc 08).
 - **AUTH-BOOT-04** `GET /admin/setup-status` (public) returns `{setup_required}` — true while no active admin
   exists anywhere.
+- **AUTH-BOOT-05** The setup form has a "Clinic Time Zone" list, preset to the browser's zone. The chosen IANA
+  zone (`timezone`, optional) becomes the clinic's zone; an unknown zone is rejected with 422.
 - **AUTH-BOOT-05 First-Time Setup page (`/admin/setup`, public).** Heading "First-Time Setup". While setup is
   required: text "Create the first administrator account. This page works only until an administrator exists.",
   fields Full Name (VAL-01), Email (VAL-02), Password (VAL-04), Confirm Password (VAL-05), button "Create

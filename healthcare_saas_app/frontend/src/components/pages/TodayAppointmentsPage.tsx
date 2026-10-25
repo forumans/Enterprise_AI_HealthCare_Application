@@ -7,7 +7,9 @@
 import React, { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../../api";
-import { parseServerDate } from "../../utils";
+import { useClinicTimeZone } from "../../contexts/ClinicTimeZoneContext";
+import { formatInZone, parseServerDate } from "../../utils";
+import { ClinicTimeNote } from "../common/ClinicTimeNote";
 import type { SessionState } from "../../types/app";
 import { RescheduleAppointmentModal, type RescheduleTarget } from "../common/RescheduleAppointmentModal";
 
@@ -109,6 +111,7 @@ export function TodayAppointmentsPage({ auth, userData, appointments }: TodayApp
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [rescheduleTarget, setRescheduleTarget] = useState<RescheduleTarget | null>(null);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const timeZone = useClinicTimeZone();
 
   // Fetch, keep confirmed and scheduled appointments, and sort by time
   const refreshTodayAppointments = async () => {
@@ -134,10 +137,8 @@ export function TodayAppointmentsPage({ auth, userData, appointments }: TodayApp
     loadTodayAppointments();
   }, [auth.session.accessToken]);
 
-  const formatTime = (timeStr: string) => {
-    const date = parseServerDate(timeStr);
-    return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
-  };
+  const formatTime = (timeStr: string) =>
+    formatInZone(timeStr, timeZone, { hour: '2-digit', minute: '2-digit', hour12: true });
 
   const handleConfirmAppointment = async (appointmentId: string) => {
     if (!window.confirm("Are you sure you want to confirm this appointment?")) {
@@ -181,6 +182,7 @@ export function TodayAppointmentsPage({ auth, userData, appointments }: TodayApp
   return (
     <section>
       <h2>Today's Appointments</h2>
+      <ClinicTimeNote style={{ margin: '-12px 0 0 0', fontSize: '13px' }} />
       
       <DoctorDetails session={auth.session} auth={auth} />
       

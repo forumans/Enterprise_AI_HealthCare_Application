@@ -6,12 +6,17 @@
 
 import React, { useEffect, useState } from "react";
 import { api } from "../../api";
-import { OFFICE_HOUR_SLOTS, WORKDAY_FIRST_SLOT_HOUR, localSlotKey, parseServerDate, rescheduleSlotState } from "../../utils";
+import { useClinicTimeZone } from "../../contexts/ClinicTimeZoneContext";
+import {
+  OFFICE_HOUR_SLOTS, WORKDAY_FIRST_SLOT_HOUR, addDays, cellKey, clinicSlotKey, clinicToday, dayKey, formatDay,
+  parseServerDate, rescheduleSlotState, zonedTimeToDate,
+} from "../../utils";
+import { ClinicTimeNote } from "./ClinicTimeNote";
 
 interface SlotPickerCalendarProps {
   doctorId: string;
   accessToken: string;
-  /** Local cell key ("2026-10-22T23:00:00") of the picked slot, or null. */
+  /** Clinic-time cell key ("2026-10-22T23:00:00") of the picked slot, or null. */
   selectedKey: string | null;
   onSelect: (key: string) => void;
   /** The appointment's current time when rescheduling (API timestamp); shown as "Current". */
@@ -31,6 +36,7 @@ export function SlotPickerCalendar({ doctorId, accessToken, selectedKey, onSelec
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [weekOffset, setWeekOffset] = useState(0);
+  const timeZone = useClinicTimeZone();
 
   useEffect(() => {
     setLoading(true);
@@ -44,13 +50,14 @@ export function SlotPickerCalendar({ doctorId, accessToken, selectedKey, onSelec
       .finally(() => setLoading(false));
   }, [doctorId, accessToken, refreshKey]);
 
-  const currentKey = currentTime ? localSlotKey(parseServerDate(currentTime)) : "";
-  const statusByKey = new Map(availability.map(a => [localSlotKey(parseServerDate(a.slot_time)), a.status]));
-  const conflictKeys = new Set(conflictingTimes.map(t => localSlotKey(parseServerDate(t))));
+  const currentKey = currentTime ? clinicSlotKey(parseServerDate(currentTime), timeZone) : "";
+  const statusByKey = new Map(availability.map(a => [clinicSlotKey(parseServerDate(a.slot_time), timeZone), a.status]));
+  const conflictKeys = new Set(conflictingTimes.map(t => clinicSlotKey(parseServerDate(t), timeZone)));
 
+  // Seven clinic-calendar days starting today (clinic time)
   const now = new Date();
-  const startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + weekOffset * 7);
-  const days = Array.from({ length: 7 }, (_, i) => new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate() + i));
+  const startDay = addDays(clinicToday(timeZone, now), weekOffset * 7);
+  const days = Array.from({ length: 7 }, (_, i) => addDays(startDay, i));
 
   const navButton = (isDisabled: boolean): React.CSSProperties => ({
     padding: '8px 16px',
@@ -76,8 +83,9 @@ export function SlotPickerCalendar({ doctorId, accessToken, selectedKey, onSelec
         <button onClick={() => setWeekOffset(o => Math.max(0, o - 1))} disabled={weekOffset === 0} style={navButton(weekOffset === 0)}>
           Previous Week
         </button>
-        <h4 style={{ margin: 0, color: '#eaf5ff' }}>
-          Week of {days[0].getMonth() + 1}/{days[0].getDate()} - {days[6].getMonth() + 1}/{days[6].getDate()}
+        <h4 style={{ margin: 0, color: '#eaf5ff', textAlign: 'center' }}>
+          Week of {days[0].month}/{days[0].day} - {days[6].month}/{days[6].day}
+          <ClinicTimeNote />
         </h4>
         <button onClick={() => setWeekOffset(o => Math.min(MAX_WEEK_OFFSET, o + 1))} disabled={weekOffset === MAX_WEEK_OFFSET} style={navButton(weekOffset === MAX_WEEK_OFFSET)}>
           Next Week
@@ -92,10 +100,10 @@ export function SlotPickerCalendar({ doctorId, accessToken, selectedKey, onSelec
             <thead>
               <tr style={{ backgroundColor: 'rgba(9, 35, 55, 0.82)' }}>
                 {days.map(day => (
-                  <th key={day.toDateString()} style={{ padding: '10px 6px', textAlign: 'center', border: cellBorder, color: '#42b5f5', fontSize: '12px', fontWeight: 'bold' }}>
-                    <div>{day.toLocaleDateString('en-US', { weekday: 'short' })}</div>
+                  <th key={dayKey(day)} style={{ padding: '10px 6px', textAlign: 'center', border: cellBorder, color: '#42b5f5', fontSize: '12px', fontWeight: 'bold' }}>
+                    <div>{formatDay(day, { weekday: 'short' })}</div>
                     <div style={{ fontSize: '10px', marginTop: '4px' }}>
-                      {String(day.getMonth() + 1).padStart(2, '0')}/{String(day.getDate()).padStart(2, '0')}
+                      {formatDay(day, { month: '2-digit', day: '2-digit' })}
                     </div>
                   </th>
                 ))}
@@ -104,12 +112,13 @@ export function SlotPickerCalendar({ doctorId, accessToken, selectedKey, onSelec
             <tbody>
               <tr>
                 {days.map(day => (
-                  <td key={day.toDateString()} style={{ border: cellBorder, padding: '4px', verticalAlign: 'top' }}>
+                  <td key={dayKey(day)} style={{ border: cellBorder, padding: '4px', verticalAlign: 'top' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                       {OFFICE_HOUR_SLOTS.map((label, i) => {
-                        const cell = new Date(day.getFullYear(), day.getMonth(), day.getDate(), WORKDAY_FIRST_SLOT_HOUR + i);
-                        const key = localSlotKey(cell);
-                        const state = rescheduleSlotState(cell, { now, currentKey, statusByKey, conflictKeys });
+                        const hour = WORKDAY_FIRST_SLOT_HOUR + i;
+                        const cell = zonedTimeToDate(day, hour, timeZone);
+                        const key = cellKey(day, hour);
+                        const state = rescheduleSlotState(cell, { now, currentKey, statusByKey, conflictKeys, timeZone });
                         const isSelected = key === selectedKey;
                         const isAvailable = state === 'available';
 

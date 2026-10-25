@@ -31,6 +31,12 @@ describe("Support Staff menu", () => {
     );
   });
 
+  it("gives admins a Clinic Settings screen (time zone)", () => {
+    expect(submenuMap.Admin).toContainEqual(
+      expect.objectContaining({ to: "/admin/clinic-settings", label: "Clinic Settings", requiresAuth: true, role: "ADMIN" })
+    );
+  });
+
   it("lets admins register support staff", () => {
     expect(submenuMap.Admin).toContainEqual(
       expect.objectContaining({ to: "/admin/register-support-staff", label: "Register Support Staff", role: "ADMIN" })

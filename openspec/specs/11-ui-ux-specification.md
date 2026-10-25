@@ -128,11 +128,16 @@ Renders its children only when the session role is in the allowed list; otherwis
 
 ## 7. Date and time display
 
-- **UI-DT-01** Appointment date/time: weekday, month, day, year and time with AM/PM in the viewer's locale
-  (`en-US` reference), for example "Fri, Oct 23, 2026, 03:00 PM".
+- **UI-DT-01** Appointment date/time: weekday, month, day, year and time with AM/PM in **clinic time**
+  (`BR-TIME-04`, `en-US` reference) with the zone, for example "Fri, Oct 23, 2026, 03:00 PM PDT". Booking and
+  availability grids, week headings and "today" are clinic-calendar days.
 - **UI-DT-02** Dates of birth from the API (`YYYY-MM-DD`) SHALL be shown as `MM/DD/YYYY` by string reformatting,
   never through a `Date` round-trip, which can shift the day across time zones.
 - **UI-DT-03** Server timestamps without an offset SHALL be parsed as UTC (`parseServerDate`).
+- **UI-DT-04** Every calendar SHALL show "All times are clinic time: <abbr> (<zone>)" directly under its week
+  heading (component `ClinicTimeNote`), e.g. "All times are clinic time: EDT (America/New York)": the patient
+  booking calendar, the support staff booking calendars, every Reschedule dialog, Manage Availability (doctor
+  and support staff), the doctor's Weekly and Today's Appointments.
 
 ## 8. Accessibility
 

@@ -45,7 +45,7 @@ describe("AppHeader menus", () => {
 
   it("lists admin screens with System Dashboard first and the new account tools", async () => {
     expect(await openMenu("Admin", session("ADMIN"))).toEqual([
-      "System Dashboard", "Register Doctor", "Register Patient", "Register Admin", "Register Support Staff", "Reset Password / Email", "Deactivate",
+      "System Dashboard", "Register Doctor", "Register Patient", "Register Admin", "Register Support Staff", "Reset Password / Email", "Deactivate", "Clinic Settings",
     ]);
   });
 });

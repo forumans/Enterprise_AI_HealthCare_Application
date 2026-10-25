@@ -16,11 +16,11 @@ from ...core.dependencies import CurrentIdentity, get_current_identity, require_
 from ...core.database import get_db
 from ...models import Admin, Appointment, Doctor, DoctorAvailability, MedicalRecord, Patient, Prescription, User
 from ...core.security import hash_password
-from ...core.timeutils import clinic_day_bounds, clinic_today, clinic_week_bounds, parse_client_datetime, utc_now
+from ...core.timeutils import clinic_day_bounds, clinic_today, clinic_week_bounds, is_valid_timezone, parse_client_datetime, utc_now
 from ...services.availability_service import ensure_default_slots
 from ...services.account_service import ensure_email_available
 from ...services.audit_service import write_audit_log
-from ...services.tenant_service import resolve_registration_tenant
+from ...services.tenant_service import resolve_registration_tenant, set_clinic_timezone
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -58,6 +58,8 @@ class AdminRegisterRequest(BaseModel):
     full_name: str = Field(min_length=3, max_length=255)
     email: str = Field(min_length=5, max_length=255)
     password: str = Field(min_length=8, max_length=255)
+    # The clinic's IANA time zone (the setup page sends the browser's); omitted keeps the current one
+    timezone: str | None = Field(default=None, max_length=64)
 
 
 @router.get("/admin/setup-status")
@@ -82,10 +84,15 @@ async def register_admin(
     rate_limit.hit("register-ip", rate_limit.client_ip(http_request))
     if await cross_tenant.any_active_admin(db):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ADMIN_ALREADY_SET_UP)
+    timezone = (payload.timezone or "").strip()
+    if timezone and not is_valid_timezone(timezone):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unknown time zone.")
     password_hash = hash_password(payload.password)
 
     tenant = await resolve_registration_tenant(db, http_request)
     await ensure_email_available(db, payload.email.lower().strip(), tenant.id)
+    if timezone:
+        await set_clinic_timezone(db, tenant, timezone)
 
     # Create user first
     user = User(
@@ -328,7 +335,7 @@ async def list_availability(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid date format.") from exc
 
-    day_start, day_end = clinic_day_bounds(day)
+    day_start, day_end = clinic_day_bounds(day, identity.clinic_tz)
 
     stmt = (
         select(DoctorAvailability)
@@ -409,7 +416,7 @@ async def list_all_availability(
         return []
 
     # Top up default office-hour slots (8 AM–11 PM clinic local time) for the next 7 days.
-    await ensure_default_slots(db, doctor, now=now)
+    await ensure_default_slots(db, doctor, identity.clinic_tz, now=now)
 
     # Get all availability slots
     stmt = (
@@ -565,7 +572,7 @@ async def doctor_appointments_today(
     identity: CurrentIdentity = Depends(require_roles("DOCTOR")),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    start, end = clinic_day_bounds(clinic_today())
+    start, end = clinic_day_bounds(clinic_today(identity.clinic_tz), identity.clinic_tz)
 
     doctor = (
         await db.execute(
@@ -617,7 +624,7 @@ async def doctor_all_appointments(
 ) -> list[dict]:
     """Get all appointments for a given week without date restrictions."""
     
-    anchor = from_date or clinic_today()
+    anchor = from_date or clinic_today(identity.clinic_tz)
     
     doctor = (
         await db.execute(
@@ -632,7 +639,7 @@ async def doctor_all_appointments(
     if doctor is None:
         return []
 
-    week_start, week_end = clinic_week_bounds(anchor)
+    week_start, week_end = clinic_week_bounds(anchor, identity.clinic_tz)
     
     stmt = (
         select(Appointment, Patient)
@@ -770,8 +777,8 @@ async def doctor_weekly_appointments(
     identity: CurrentIdentity = Depends(require_roles("DOCTOR")),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    anchor = from_date or clinic_today()
-    today = clinic_today()
+    today = clinic_today(identity.clinic_tz)
+    anchor = from_date or today
     if anchor < today:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot request appointments earlier than today.")
     if anchor > today + timedelta(days=30):
@@ -789,7 +796,7 @@ async def doctor_weekly_appointments(
     if doctor is None:
         return []
 
-    week_start, week_end = clinic_week_bounds(anchor)
+    week_start, week_end = clinic_week_bounds(anchor, identity.clinic_tz)
     stmt = (
         select(Appointment, Patient)
         .join(Patient, Patient.id == Appointment.patient_id)

@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
+from zoneinfo import ZoneInfo
 
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import User
+from ..models import Tenant, User
 from .database import get_db
+from .timeutils import clinic_zone
 
 
 @dataclass(frozen=True)
@@ -18,6 +20,8 @@ class CurrentIdentity:
     tenant_id: str
     user_id: str
     role: str
+    # The clinic's time zone (tenants.timezone): office hours, "today" and weeks are computed in it
+    clinic_tz: ZoneInfo = field(default_factory=lambda: clinic_zone(None))
 
 
 SESSION_ENDED = "Your session is no longer valid. Please sign in again."
@@ -40,7 +44,9 @@ async def get_current_identity(request: Request, db: AsyncSession = Depends(get_
 
     account = (
         await db.execute(
-            select(User.tenant_id, User.role, User.is_active, User.deleted_at).where(User.id == user_id)
+            select(User.tenant_id, User.role, User.is_active, User.deleted_at, Tenant.timezone)
+            .outerjoin(Tenant, Tenant.id == User.tenant_id)
+            .where(User.id == user_id)
         )
     ).first()
     if (
@@ -52,7 +58,7 @@ async def get_current_identity(request: Request, db: AsyncSession = Depends(get_
     ):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=SESSION_ENDED)
 
-    return CurrentIdentity(tenant_id=tenant_id, user_id=user_id, role=role)
+    return CurrentIdentity(tenant_id=tenant_id, user_id=user_id, role=role, clinic_tz=clinic_zone(account.timezone))
 
 
 def get_current_tenant(identity: CurrentIdentity = Depends(get_current_identity)) -> str:

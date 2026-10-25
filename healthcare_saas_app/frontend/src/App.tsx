@@ -57,6 +57,7 @@ import {
 import {
   AdminDeactivatePage
 } from "./components/pages/AdminDeactivatePage";
+import { AdminClinicSettingsPage } from "./components/pages/AdminClinicSettingsPage";
 import { ForgotPasswordPage } from "./components/pages/ForgotPasswordPage";
 import { ResetPasswordPage } from "./components/pages/ResetPasswordPage";
 import { AdminSetupPage } from "./components/pages/AdminSetupPage";
@@ -372,6 +373,18 @@ function AppContent() {
               <ProtectedRoute allowed={["ADMIN"]} role={auth.session.role}>
                 <AppLayout session={auth.session} status={auth.status}>
                   <AdminDeactivatePage auth={auth} />
+                </AppLayout>
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Admin: clinic settings (time zone) */}
+          <Route
+            path="/admin/clinic-settings"
+            element={
+              <ProtectedRoute allowed={["ADMIN"]} role={auth.session.role}>
+                <AppLayout session={auth.session} status={auth.status}>
+                  <AdminClinicSettingsPage auth={auth} />
                 </AppLayout>
               </ProtectedRoute>
             }

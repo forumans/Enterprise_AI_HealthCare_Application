@@ -7,7 +7,8 @@
 import React, { useState, useEffect } from "react";
 import { api } from "../../api";
 import { useAuthContext } from "../../contexts/AuthContext";
-import { parseErrorMessage } from "../../utils";
+import { useClinicTimeZone } from "../../contexts/ClinicTimeZoneContext";
+import { formatInZone, parseErrorMessage } from "../../utils";
 import type { SessionState } from "../../types/app";
 
 interface PatientPrescriptionsPageProps {
@@ -35,6 +36,7 @@ export function PatientPrescriptionsPage({ auth }: PatientPrescriptionsPageProps
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [patientInfo, setPatientInfo] = useState<any>(null);
+  const timeZone = useClinicTimeZone();
 
   // Clear any existing status messages when navigating to prescriptions page
   useEffect(() => {
@@ -77,16 +79,16 @@ export function PatientPrescriptionsPage({ auth }: PatientPrescriptionsPageProps
     loadPrescriptions();
   }, [auth.session.accessToken]);
 
-  // Format date for display
+  // Format date for display (clinic time)
   const formatDate = (dateStr: string) => {
     try {
-      const date = new Date(dateStr);
-      return date.toLocaleDateString('en-US', {
+      return formatInZone(dateStr, timeZone, {
         year: 'numeric',
         month: 'short',
         day: 'numeric',
         hour: '2-digit',
-        minute: '2-digit'
+        minute: '2-digit',
+        timeZoneName: 'short'
       });
     } catch (error) {
       return dateStr;
@@ -184,7 +186,7 @@ export function PatientPrescriptionsPage({ auth }: PatientPrescriptionsPageProps
                 <div>
                   <span style={{ color: '#94a3b8', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Date of Birth</span>
                   <p style={{ color: '#eef8ff', fontSize: '14px', fontWeight: '500', margin: '4px 0 0 0' }}>
-                    {patientInfo.date_of_birth ? new Date(patientInfo.date_of_birth).toLocaleDateString() : 'N/A'}
+                    {patientInfo.date_of_birth ? new Date(patientInfo.date_of_birth).toLocaleDateString("en-US", { timeZone: "UTC" }) : 'N/A'}
                   </p>
                 </div>
               </div>

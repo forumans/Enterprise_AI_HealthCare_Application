@@ -7,7 +7,8 @@
 
 import React, { useState } from "react";
 import { api } from "../../api";
-import { parseServerDate, parseErrorMessage } from "../../utils";
+import { useClinicTimeZone } from "../../contexts/ClinicTimeZoneContext";
+import { formatInZone, parseErrorMessage, slotKeyToDate } from "../../utils";
 import { SlotPickerCalendar } from "./SlotPickerCalendar";
 
 export interface RescheduleTarget {
@@ -32,23 +33,26 @@ interface RescheduleAppointmentModalProps {
 const labelStyle: React.CSSProperties = { fontSize: '12px', fontWeight: '700', color: '#42b5f5', textTransform: 'uppercase', display: 'block', marginBottom: '4px' };
 const valueStyle: React.CSSProperties = { margin: 0, fontSize: '14px', color: '#eef8ff' };
 
-export const formatDateTime = (date: Date) =>
-  date.toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+/** An instant (Date or API timestamp) in clinic time with the zone, e.g. "Thu, Oct 22, 2026, 09:00 AM PDT". */
+export const formatDateTime = (value: Date | string, timeZone: string) =>
+  formatInZone(value, timeZone, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short' });
 
 export function RescheduleAppointmentModal({ target, accessToken, onClose, onRescheduled, conflictingTimes = [] }: RescheduleAppointmentModalProps) {
   const [error, setError] = useState("");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const timeZone = useClinicTimeZone();
 
   const handleConfirm = async () => {
     if (!selectedKey) return;
     setSaving(true);
     setError("");
     try {
-      // selectedKey is a naive local-time cell key; convert to UTC for the API
-      await api.rescheduleAppointment(accessToken, target.id, new Date(selectedKey).toISOString());
+      // selectedKey is a clinic-time cell key; convert to UTC for the API
+      const newTime = slotKeyToDate(selectedKey, timeZone);
+      await api.rescheduleAppointment(accessToken, target.id, newTime.toISOString());
       await onRescheduled();
-      alert(`Appointment rescheduled to ${formatDateTime(new Date(selectedKey))}`);
+      alert(`Appointment rescheduled to ${formatDateTime(newTime, timeZone)}`);
       onClose();
     } catch (err) {
       console.error("Failed to reschedule appointment:", err);
@@ -86,7 +90,7 @@ export function RescheduleAppointmentModal({ target, accessToken, onClose, onRes
           {target.doctorName && (
             <div><span style={labelStyle}>Doctor</span><p style={valueStyle}>{target.doctorName}</p></div>
           )}
-          <div><span style={labelStyle}>Current Date/Time</span><p style={valueStyle}>{formatDateTime(parseServerDate(target.appointmentTime))}</p></div>
+          <div><span style={labelStyle}>Current Date/Time</span><p style={valueStyle}>{formatDateTime(target.appointmentTime, timeZone)}</p></div>
           {target.status && (
             <div><span style={labelStyle}>Status</span><p style={valueStyle}>{target.status}</p></div>
           )}
@@ -111,7 +115,7 @@ export function RescheduleAppointmentModal({ target, accessToken, onClose, onRes
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '12px', marginTop: '16px', flexWrap: 'wrap' }}>
           <span style={{ color: '#b4cce2', fontSize: '14px' }}>
-            {selectedKey ? `New time: ${formatDateTime(new Date(selectedKey))}` : 'Select an available slot'}
+            {selectedKey ? `New time: ${formatDateTime(slotKeyToDate(selectedKey, timeZone), timeZone)}` : 'Select an available slot'}
           </span>
           <button
             onClick={handleConfirm}

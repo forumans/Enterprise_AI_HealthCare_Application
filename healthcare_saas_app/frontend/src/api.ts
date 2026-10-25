@@ -312,7 +312,7 @@ export const api = {
     request<{ setup_required: boolean }>("/admin/setup-status", { method: "GET" }),
 
   /** Public first-time setup: creates the first administrator (refused once any admin exists). */
-  bootstrapAdmin: (payload: { full_name: string; email: string; password: string }) =>
+  bootstrapAdmin: (payload: { full_name: string; email: string; password: string; timezone?: string }) =>
     request<{ message: string }>("/admin/register", {
       method: "POST",
       body: JSON.stringify(payload),
@@ -425,9 +425,17 @@ export const api = {
     }),
 
   getCurrentTenant: (token: string) =>
-    request<{ id: string; name: string; domain?: string }>("/tenants/current", {
+    request<{ id: string; name: string; domain?: string; timezone: string }>("/tenants/current", {
       method: "GET",
       headers: withAuth(token),
+    }),
+
+  /** Admin: change the clinic's IANA time zone; open/blocked slots keep their local hours. */
+  updateCurrentTenant: (token: string, payload: { timezone: string }) =>
+    request<{ id: string; name: string; domain?: string; timezone: string; slots_moved: number }>("/tenants/current", {
+      method: "PATCH",
+      headers: withAuth(token),
+      body: JSON.stringify(payload),
     }),
 
   confirmAppointment: (appointmentId: string, token?: string) =>

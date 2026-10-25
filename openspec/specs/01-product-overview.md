@@ -21,12 +21,12 @@ Every record belongs to exactly one tenant. Users only ever see their own tenant
 | Area | Capabilities |
 |------|--------------|
 | Identity | Login per role, patient self-registration, doctor self-registration, admin-created accounts for all roles, email-based password reset, admin password/email reset, deactivate/activate, soft delete/restore |
-| Scheduling | Hourly slots from 8 AM to the 11 PM slot, clinic time; automatic generation of a rolling 7-day window; block, unblock, add and delete slots; booking up to 5 weeks ahead |
+| Scheduling | Hourly slots from 8 AM to the 11 PM slot in each clinic's own time zone; automatic generation of a rolling 7-day window; block, unblock, add and delete slots; booking up to 5 weeks ahead |
 | Appointments | Book, confirm, reschedule, cancel, edit reason (support staff), complete (through consultation) |
 | Clinical | Consultation form: symptoms, diagnosis, lab results, prescription (medication, dosage, instructions, pharmacy) |
 | Records | Patients see their completed visits with diagnoses and prescriptions; doctors search patients and view their history |
 | Documents | Patient document upload to private object storage; download through short-lived signed URLs |
-| Administration | Dashboard (counts and appointment metrics), user registration, account management, audit log query |
+| Administration | Dashboard (counts and appointment metrics), user registration, account management, clinic time zone, audit log query |
 | Security | JWT sessions, RBAC on every endpoint, tenant isolation, audit trail, security headers, PHI-safe logging |
 
 ### 2.2 Out of scope (planned for later releases)
@@ -34,7 +34,7 @@ Every record belongs to exactly one tenant. Users only ever see their own tenant
 | Item | Notes |
 |------|-------|
 | Billing | A placeholder menu item and page exist; no functionality yet. |
-| Clinics in different time zones | One clinic time zone per deployment (`CLINIC_TIMEZONE`). Supporting several needs a per-tenant (or per-doctor) zone, slot generation and day boundaries per tenant, and grids rendered in clinic time with the viewer's offset shown. |
+| Several locations in different time zones within one clinic | The time zone is per clinic (tenant). A clinic whose doctors work in different zones would need a per-location or per-doctor zone. |
 | Tenant onboarding UI | Clinics are created by the platform operator (SQL or seed script), each with its web address in `tenants.domain`. |
 | Patient documents screen | The upload and list APIs exist; there is no screen yet. |
 | Soft delete / restore screen | The APIs exist; there is no screen yet. |
@@ -90,7 +90,7 @@ tenants (see `BR-ACC-01`).
 | Reason / notes | The patient's free-text reason for the visit, stored in `appointments.notes`. |
 | Medical record | Symptoms, diagnosis and lab results for one appointment (1:1). |
 | Prescription | Medication details for one medical record (1:1), optionally routed to a pharmacy. |
-| Clinic time | Wall-clock time in the tenant's IANA time zone (`CLINIC_TIMEZONE`, default `America/New_York`). |
+| Clinic time | Wall-clock time in the clinic's (tenant's) own IANA time zone, `tenants.timezone` (`BR-TIME-02`). |
 | Soft delete | Setting `deleted_at` / `deleted_by` instead of removing the row. Soft-deleted rows are hidden everywhere. |
 | Deactivate | Setting `users.is_active = false`. The person cannot sign in; their data stays visible to staff. |
 | PHI | Protected health information: names, contact details, dates of birth, clinical data, documents. |

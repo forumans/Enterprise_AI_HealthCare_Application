@@ -73,6 +73,7 @@ class TempDatabase:
             await self.run_migration("003_convert_timestamps_to_timestamptz.sql")
             await self.run_migration("005_add_support_staff_role.sql")
             await self.run_migration("007_row_level_security.sql")
+            await self.run_migration("008_add_tenant_timezone.sql")
         return self
 
     @property

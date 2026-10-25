@@ -19,6 +19,11 @@ SELECT json_build_object(
   'functions', (SELECT json_agg(x ORDER BY x) FROM (
       SELECT format('%s(%s) md5=%s', p.proname, pg_get_function_identity_arguments(p.oid), md5(p.prosrc)) AS x
       FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace) s),
+  'rls_tables', (SELECT coalesce(json_agg(relname ORDER BY relname), '[]') FROM pg_class
+      WHERE relnamespace = 'public'::regnamespace AND relrowsecurity),
+  'policies', (SELECT coalesce(json_agg(x ORDER BY x), '[]') FROM (
+      SELECT format('%s %s: using %s / check %s', tablename, policyname, qual, with_check) AS x
+      FROM pg_policies WHERE schemaname = 'public') s),
   'extensions', (SELECT json_agg(x ORDER BY x) FROM (SELECT extname AS x FROM pg_extension) s),
   'schemas', (SELECT json_agg(nspname ORDER BY nspname) FROM pg_namespace
               WHERE nspname NOT LIKE 'pg_%' AND nspname <> 'information_schema'),

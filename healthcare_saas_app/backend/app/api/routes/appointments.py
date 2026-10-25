@@ -343,7 +343,7 @@ async def confirm_appointment(
     identity: CurrentIdentity = Depends(require_roles("DOCTOR")),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Confirm an appointment (change status to CONFIRMED)."""
+    """Confirm one of the calling doctor's own appointments (change status to CONFIRMED)."""
     
     # Find the appointment
     stmt = select(Appointment).where(
@@ -357,7 +357,10 @@ async def confirm_appointment(
     
     if appointment is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Appointment not found.")
-    
+    # Only the appointment's own doctor may confirm it
+    if await _own_doctor_id(db, identity) != appointment.doctor_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to change this appointment.")
+
     # Only allow confirming scheduled appointments
     if appointment.status != "SCHEDULED":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only scheduled appointments can be confirmed.")

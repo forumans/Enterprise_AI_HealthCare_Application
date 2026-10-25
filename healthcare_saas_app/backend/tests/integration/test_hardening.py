@@ -22,12 +22,13 @@ from starlette.datastructures import Headers
 
 from backend.app.api.routes import patient as patient_routes
 from backend.app.api.routes.admin import soft_delete_user
-from backend.app.api.routes.appointments import CreateAppointmentRequest, create_appointment
+from backend.app.api.routes.appointments import CreateAppointmentRequest, confirm_appointment, create_appointment
 from backend.app.api.routes.auth import LoginRequest, login
 from backend.app.api.routes.doctor import (
     AdminRegisterRequest,
     DoctorRegisterRequest,
     UpsertAvailabilityRequest,
+    list_doctors,
     register_admin,
     register_doctor,
     update_doctor_profile,
@@ -40,6 +41,7 @@ from backend.app.api.routes.medical_records import (
     get_medical_record_by_appointment,
 )
 from backend.app.api.routes.prescriptions import CreatePrescriptionRequest, create_prescription, get_prescription
+from backend.app.api.routes.support import support_search_doctors
 from backend.app.api.routes.tenants import get_tenant
 from backend.app.core import rate_limit, storage, timeutils
 from backend.app.main import app
@@ -328,6 +330,54 @@ class HardeningTests(unittest.IsolatedAsyncioTestCase):
         async with self.sessions() as s:
             await soft_delete_user(user_id=self.ids["patient2_user"], identity=admin, db=s)
         self.assertIsNotNone(await self.fetchval("SELECT deleted_at FROM users WHERE id = $1", self.ids["patient2_user"]))
+
+    # --- GAP-02: only the appointment's own doctor confirms it ---------------------------------------
+
+    async def test_gap02_only_the_owning_doctor_confirms_an_appointment(self):
+        appointment_id = await self.book("patient1", 15)
+        async with self.sessions() as s:
+            error = await self.expect_status(403, confirm_appointment(appointment_id=appointment_id, identity=self.identity("doctor2", "DOCTOR"), db=s))
+        self.assertEqual(error.detail, "Not allowed to change this appointment.")
+        self.assertEqual(await self.fetchval("SELECT status::text FROM appointments WHERE id = $1", appointment_id), "SCHEDULED")
+        async with self.sessions() as s:
+            await confirm_appointment(appointment_id=appointment_id, identity=self.identity("doctor", "DOCTOR"), db=s)
+        self.assertEqual(await self.fetchval("SELECT status::text FROM appointments WHERE id = $1", appointment_id), "CONFIRMED")
+
+    # --- GAP-03: doctors awaiting approval aren't listed or bookable ----------------------------------
+
+    async def test_gap03_deactivated_doctors_are_not_listed_or_bookable(self):
+        await self.fetchval("UPDATE users SET is_active = false WHERE id = $1 RETURNING id", self.ids["doctor2_user"])
+        async with self.sessions() as s:
+            names = [d["name"] for d in await list_doctors(identity=self.identity("patient1", "PATIENT"), db=s)]
+        self.assertEqual(names, ["Dr Test"])
+
+        with self.assertRaises(HTTPException) as ctx:
+            await self.book("patient1", 16, doctor="doctor2")
+        self.assertEqual((ctx.exception.status_code, ctx.exception.detail), (409, "This doctor isn't accepting appointments."))
+        self.assertEqual(await self.fetchval("SELECT count(*) FROM appointments WHERE doctor_id = $1", self.ids["doctor2"]), 0)
+
+        # Support staff still find them (to manage existing appointments), flagged as inactive
+        staff = SimpleNamespace(user_id=self.ids["admin_user"], tenant_id=self.ids["tenant"], role="SUPPORT_STAFF", clinic_tz=NY)
+        async with self.sessions() as s:
+            found = {d["name"]: d["is_active"] for d in await support_search_doctors(q="*", identity=staff, db=s)}
+        self.assertEqual(found, {"Dr Second": False, "Dr Test": True})
+
+        # Once an admin activates the doctor, booking works
+        await self.fetchval("UPDATE users SET is_active = true WHERE id = $1 RETURNING id", self.ids["doctor2_user"])
+        self.assertTrue(await self.book("patient1", 16, doctor="doctor2"))
+
+    async def test_gap03_unknown_or_other_clinic_doctors_are_not_found(self):
+        other_user = await self.fetchval(
+            "INSERT INTO users (tenant_id, email, password_hash, role) VALUES ($1, 'far@example.test', 'x', 'DOCTOR') RETURNING id", self.ids["other_tenant"],
+        )
+        other_doctor = str(await self.fetchval(
+            "INSERT INTO doctors (tenant_id, user_id, full_name) VALUES ($1, $2, 'Dr Far') RETURNING id", self.ids["other_tenant"], other_user,
+        ))
+        slot = local(timeutils.clinic_today(NY) + timedelta(days=2), 10)
+        payload = CreateAppointmentRequest(doctor_id=other_doctor, slot=slot.isoformat(), reason="Regular checkup")
+        async with self.sessions() as s:
+            error = await self.expect_status(404, create_appointment(payload=payload, identity=self.identity("patient1", "PATIENT"), db=s))
+        self.assertEqual(error.detail, "Doctor not found.")
 
 
 if __name__ == "__main__":

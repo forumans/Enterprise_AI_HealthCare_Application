@@ -9,7 +9,7 @@ from sqlalchemy import and_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import Appointment, DoctorAvailability
+from ..models import Appointment, Doctor, DoctorAvailability, User
 
 
 async def book_appointment(
@@ -24,9 +24,27 @@ async def book_appointment(
     """Book an appointment and mark corresponding availability as booked.
 
     Enforces no-double-booking constraints from DB unique indexes and performs
-    availability check before insert.
+    availability check before insert. The doctor must be in the tenant with a usable login: a doctor
+    awaiting an admin's approval (or deactivated, or deleted) can't be booked.
     """
-    
+
+    doctor_login_active = (
+        await db.execute(
+            select(User.is_active)
+            .join(Doctor, Doctor.user_id == User.id)
+            .where(
+                Doctor.id == doctor_id,
+                Doctor.tenant_id == tenant_id,
+                Doctor.deleted_at.is_(None),
+                User.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if doctor_login_active is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Doctor not found.")
+    if not doctor_login_active:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This doctor isn't accepting appointments.")
+
     availability_stmt = (
         select(DoctorAvailability)
         .where(

@@ -1,6 +1,7 @@
 # Known Gaps — Current Code vs. Feature Specifications
 
-Found while reverse-engineering the code at commit `bc3b34c` (2026-10-25). The feature specs state the
+Found while reverse-engineering the code at commit `bc3b34c` (2026-10-25). GAP-02 and GAP-03 were fixed on
+2026-10-25 (branch `fix/gap-02-03-doctor-checks`); their IDs are not reused. The feature specs state the
 **intended** behavior; this file records where the running code differs, so that:
 
 - an agent rebuilding from the specs knows these are deliberate corrections, not omissions, and
@@ -13,8 +14,6 @@ consistency, or dead code.
 
 | ID | Severity | Where (code) | Current behavior | Intended (spec) | Recommended fix |
 |----|----------|--------------|------------------|-----------------|-----------------|
-| GAP-02 | High | `backend/app/api/routes/appointments.py` `confirm_appointment` | Any doctor of the tenant can confirm any appointment of the tenant (no ownership check). | Only the appointment's own doctor; else 403 "Not allowed to change this appointment." ([07](features/07-appointment-lifecycle.md) §5) | Compare `appointment.doctor_id` with `_own_doctor_id(...)` as `update_appointment_status` does; add a negative test. |
-| GAP-03 | High | `routes/doctor.py` `list_doctors`; `routes/support.py` `support_search_doctors`; `services/appointment_service.py` `book_appointment` | `GET /doctors` and support doctor search return doctors whose login is deactivated (e.g. self-registered doctors awaiting approval), and booking doesn't check the doctor's account, so a pending doctor can be booked. | Only doctors whose user is active and not deleted are listed and bookable ([05](features/05-doctor-self-registration.md), [08](features/08-doctor-availability.md) §3.1, [07](features/07-appointment-lifecycle.md) BOOK-06). | Join `users` with `is_active AND deleted_at IS NULL` in the list, the support search (or show a "Pending approval" marker) and the booking lookup. |
 | GAP-04 | Medium | `routes/admin.py` `admin_create_user` | No application audit row when an admin creates a user (only the DB trigger row). | `users` INSERT audit naming the admin ([19](features/19-admin-user-registration.md) §3, F04 §1.1). | Call `write_audit_log` before commit. |
 | GAP-05 | Medium | `routes/admin.py` `soft_delete_user` | Sets `users.deleted_at` but not `users.deleted_by`. | Both set ([20](features/20-admin-account-management.md) BR-ACC-06). | Add `deleted_by=identity.user_id` to the `update(User)` values. |
 | GAP-06 | Medium | `routes/auth.py` `RegisterRequest`; `routes/doctor.py` `DoctorRegisterRequest` | Server checks only name length and password length (and email length for doctors): email format, phone pattern, gender enum, DOB range and doctor age ≥ 18 are enforced only in the browser. | Server enforces the same rules as the UI ([04](features/04-patient-self-registration.md) AUTH-REGP-SRV, [05](features/05-doctor-self-registration.md) AUTH-REGD-03). | Add Pydantic validators (pattern, `Literal` gender, date checks); return the generic 422. |

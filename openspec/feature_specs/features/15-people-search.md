@@ -36,8 +36,10 @@ insurance_provider (""), city (""), state ("")}`.
 
 ### `GET /support/doctors?q=` — S
 Join `doctors` ↔ `users`; tenant; `doctors.deleted_at IS NULL`; BR-SRCH-02 with email.
-Item `{id (doctor id), name, phone, email, specialty (""), license_number ("")}`.
-Deactivated (pending) doctors SHOULD be marked or excluded when used for booking (GAP-03).
+Item `{id (doctor id), name, phone, email, specialty (""), license_number (""), is_active}` (`is_active` =
+the doctor's login). Deactivated doctors (e.g. awaiting approval) are still listed, so staff can manage their
+existing appointments and slots; `SupportSearchPanel` shows a muted "(inactive)" after their name, and booking them
+is refused by the server ([07](07-appointment-lifecycle.md) BOOK-06).
 
 ### `GET /admin/roles` — A
 `[{"value":"PATIENT","label":"Patients"}, {"value":"DOCTOR","label":"Doctors"},

@@ -55,6 +55,21 @@ describe("SupportSearchPanel", () => {
     expect(screen.getByRole("button", { name: "Dr Two" }).closest("tr")).toHaveStyle({ backgroundColor: "rgba(66, 181, 245, 0.18)" });
   });
 
+  it("marks doctors whose account is deactivated as inactive", async () => {
+    vi.mocked(api.supportSearchDoctors).mockResolvedValue([
+      { ...doctors[0], is_active: true },
+      { ...doctors[1], is_active: false },
+    ]);
+    render(<SupportSearchPanel kind="doctor" accessToken="t" onPick={vi.fn()} />);
+    await userEvent.type(screen.getByLabelText("Find Doctor"), "*");
+    await userEvent.click(screen.getByRole("button", { name: "Search" }));
+
+    const rows = await screen.findAllByRole("row");
+    expect(within(rows[1]).queryByText("(inactive)")).not.toBeInTheDocument();
+    expect(within(rows[2]).getByText("(inactive)")).toBeInTheDocument();
+    expect(within(rows[2]).getByRole("button", { name: "Dr Two" })).toBeInTheDocument();  // still pickable
+  });
+
   it("shows patient columns and a no-match message", async () => {
     vi.mocked(api.supportSearchPatients).mockResolvedValueOnce([
       { id: "p1", name: "Steve Works", phone: "(555) 010-2030", email: "s@x.test", date_of_birth: "1985-03-07", gender: "Male", insurance_provider: "Acme", city: "Austin", state: "TX" },

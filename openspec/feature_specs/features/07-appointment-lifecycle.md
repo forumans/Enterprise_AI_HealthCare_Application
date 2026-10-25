@@ -24,7 +24,7 @@ Screens are specified separately and only call these endpoints.
 
 - **BR-APT-01** New appointments start `SCHEDULED`.
 - **BR-APT-02** Only `SCHEDULED` can be confirmed ("Only scheduled appointments can be confirmed.", 400); only the
-  appointment's own doctor confirms (403 "Not allowed to change this appointment." otherwise — GAP-02).
+  appointment's own doctor confirms (403 "Not allowed to change this appointment." otherwise).
 - **BR-APT-03** `COMPLETED` is set when the doctor saves a consultation ([12](12-consultation-clinical-records.md))
   through the generic status endpoint.
 - **BR-APT-04 Cancel** sets `status=CANCELLED`, `deleted_at=now`, `deleted_by=caller`; the trigger frees the slot
@@ -52,7 +52,9 @@ Screens are specified separately and only call these endpoints.
   `BOOKED`, flush. A unique-index violation (doctor or patient already busy at that time) →
   **409 "Appointment conflicts with existing booking."**. Audit `appointments` INSERT
   `{doctor_id, patient_id, appointment_time: <slot as sent>}`. Commit. Return **201** `{"id", "status"}`.
-- **BOOK-06** The doctor SHALL be an active (user active, not deleted) doctor of the tenant (GAP-03).
+- **BOOK-06** The doctor SHALL be a non-deleted doctor of the tenant whose login is active and not deleted. Checked
+  before the slot lock: unknown, deleted or other-tenant doctor → **404 "Doctor not found."**; deactivated login
+  (e.g. self-registered and awaiting approval) → **409 "This doctor isn't accepting appointments."**.
 - **BOOK-07 (UI)** Grids never offer past cells, non-`AVAILABLE` cells, or cells where the patient already has a
   live (`SCHEDULED`/`CONFIRMED`) appointment with any doctor.
 
@@ -78,7 +80,7 @@ Screens are specified separately and only call these endpoints.
 
 | Action | Endpoint | Who | Rules | Success |
 |--------|----------|-----|-------|---------|
-| Confirm | `POST /appointments/{id}/confirm` | D (own) | 404 if missing/deleted/other tenant; 400 unless `SCHEDULED`; 403 not own (GAP-02) | `{"message": "Appointment confirmed successfully."}`; audit `{status:"SCHEDULED"}`→`{status:"CONFIRMED"}` |
+| Confirm | `POST /appointments/{id}/confirm` | D (own) | 404 if missing/deleted/other tenant; 403 "Not allowed to change this appointment." if not own; 400 unless `SCHEDULED` | `{"message": "Appointment confirmed successfully."}`; audit `{status:"SCHEDULED"}`→`{status:"CONFIRMED"}` |
 | Edit reason | `PATCH /appointments/{id}` `{reason ≥5}` | S | 404; only `SCHEDULED`/`CONFIRMED` else 400 "Only scheduled or confirmed appointments can be updated."; stored trimmed | `{"id", "reason", "status"}`; audit `{notes}` old→new |
 | Set status | `PATCH /appointments/{id}/status` `{status}` | D (own), A | value upper-cased/trimmed; `CANCELLED` → 400 "Use DELETE /appointments/{id} to cancel an appointment."; not in `SCHEDULED/CONFIRMED/COMPLETED` → 422 "Invalid appointment status."; 404; doctor not own → 403 "Not allowed to change this appointment." | `{"message": "Appointment status updated."}`; audit `{status}` old→new |
 | Cancel | `DELETE /appointments/{id}` | P (own), D (own), S, A | 404; patient/doctor not own → 403 "Not allowed to cancel this appointment." | `{"message": "Appointment cancelled."}`; audit DELETE `{status: old}`→`{status:"CANCELLED"}` |
@@ -131,7 +133,11 @@ UpdateAppointmentStatusRequest { status: str }
 - **F07-AC-08** Given support staff booking without `patient_id`, Then 422 "patient_id is required.".
 - **F07-AC-09** Given a patient calling DELETE or reschedule on another patient's appointment, Then 403; on
   another tenant's, Then 404.
-- **F07-AC-10** Given doctor B, When B confirms doctor A's appointment, Then 403 (GAP-02).
+- **F07-AC-10** Given doctor B, When B confirms doctor A's appointment, Then 403 "Not allowed to change this
+  appointment." and the status stays `SCHEDULED`.
+- **F07-AC-13** Given a doctor whose login is deactivated, When a patient or support staff books one of their slots,
+  Then 409 "This doctor isn't accepting appointments." and nothing is created; given a doctor of another clinic,
+  Then 404 "Doctor not found.".
 - **F07-AC-11** Given `PATCH /status {status:"cancelled"}`, Then 400 "Use DELETE /appointments/{id} to cancel an
   appointment.".
 - **F07-AC-12** Given a confirmed appointment, When confirmed again, Then 400 "Only scheduled appointments can be

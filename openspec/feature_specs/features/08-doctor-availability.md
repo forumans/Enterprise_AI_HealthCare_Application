@@ -52,7 +52,8 @@ doctor (or support staff on their behalf) can block, unblock, add and delete ind
 ## 3. API
 
 ### 3.1 `GET /doctors` — any signed-in role
-Non-deleted doctors of the caller's tenant **whose login is active and not deleted** (GAP-03), ordered by
+Non-deleted doctors of the caller's tenant **whose login is active and not deleted** (so doctors awaiting
+approval aren't offered to patients), ordered by
 `full_name` asc: `[{id, name, specialty, license_number}]`.
 
 ### 3.2 `GET /doctors/me` — D

@@ -189,7 +189,8 @@ Remounting (changing its `key`) clears text and results.
 - Results: "<N> patient(s)/doctor(s) found. Click a name to continue." (singular for 1), then a numbered table:
   - patients: `#`, Full Name (link-style `<button>`), Phone, Email, Date of Birth (`MM/DD/YYYY` by string
     reformat, "—" if empty), Gender, Insurance, City / State (`"City, State"`);
-  - doctors: `#`, Full Name, Phone, Email, Specialty ("General Practice" if empty), License Number.
+  - doctors: `#`, Full Name, Phone, Email, Specialty ("General Practice" if empty), License Number. A doctor with
+    `is_active: false` gets a muted "(inactive)" (12 px, `#94a3b8`) after the name button; they stay pickable.
   Empty values show "—". The picked row is tinted `rgba(66,181,245,0.18)`.
 - No results: `No patients match "<q>"` (or doctors), or for `*`: "No patients found" / "No doctors found".
 

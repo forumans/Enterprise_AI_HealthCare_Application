@@ -89,10 +89,14 @@ async def support_search_doctors(
     identity: CurrentIdentity = Depends(require_roles("SUPPORT_STAFF")),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    """Find doctors of this clinic by part of their name, email or phone number."""
+    """Find doctors of this clinic by part of their name, email or phone number.
+
+    Deactivated doctors (e.g. awaiting an admin's approval) are still listed, so staff can manage their
+    existing appointments, but are flagged with `is_active: false` and can't be booked.
+    """
 
     stmt = (
-        select(Doctor, User.email)
+        select(Doctor, User.email, User.is_active)
         .join(User, User.id == Doctor.user_id)
         .where(Doctor.tenant_id == identity.tenant_id, Doctor.deleted_at.is_(None), name_phone_or_email_matches(q, Doctor, User.email))
         .order_by(Doctor.full_name.asc())
@@ -107,8 +111,9 @@ async def support_search_doctors(
             "email": email,
             "specialty": doctor.specialty or "",
             "license_number": doctor.license_number or "",
+            "is_active": bool(is_active),
         }
-        for doctor, email in rows
+        for doctor, email, is_active in rows
     ]
 
 

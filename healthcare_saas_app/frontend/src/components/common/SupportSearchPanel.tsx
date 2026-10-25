@@ -158,6 +158,9 @@ export function SupportSearchPanel(props: SupportSearchPanelProps) {
                           >
                             {row.name}
                           </button>
+                          {kind === "doctor" && (row as SupportDoctorRow).is_active === false && (
+                            <span style={{ marginLeft: '8px', color: '#94a3b8', fontSize: '12px' }}>(inactive)</span>
+                          )}
                         </td>
                         {cellsFor(row).map((value, i) => <td key={columns.headers[i]} style={cellStyle}>{value}</td>)}
                       </tr>

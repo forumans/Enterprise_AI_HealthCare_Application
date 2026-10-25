@@ -313,10 +313,20 @@ async def list_doctors(
     identity: CurrentIdentity = Depends(get_current_identity),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    """Active doctors of the caller's clinic (tenant) only."""
+    """Bookable doctors of the caller's clinic (tenant) only.
+
+    A doctor whose login is deactivated (e.g. self-registered and awaiting an admin's approval) or deleted
+    is left out, so patients can't book them.
+    """
     stmt = (
         select(Doctor)
-        .where(Doctor.tenant_id == identity.tenant_id, Doctor.deleted_at.is_(None))
+        .join(User, User.id == Doctor.user_id)
+        .where(
+            Doctor.tenant_id == identity.tenant_id,
+            Doctor.deleted_at.is_(None),
+            User.is_active.is_(True),
+            User.deleted_at.is_(None),
+        )
         .order_by(Doctor.full_name.asc())
     )
     rows = (await db.execute(stmt)).scalars().all()

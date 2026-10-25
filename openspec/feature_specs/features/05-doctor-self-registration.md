@@ -39,7 +39,8 @@ doctor by registering; an admin activates it on Admin > Deactivate ([20](20-admi
 - **AUTH-REGD-03** Server validation SHALL mirror the UI: name 3–255, email 5–255 and pattern, password 8–255,
   phone pattern, DOB required and age ≥ 18 (current code checks only name, email length and password: GAP-06).
 - **AUTH-REGD-04** A pending doctor cannot sign in (generic 401) and SHALL NOT appear in patient/support doctor
-  lists or be bookable until activated (GAP-03).
+  lists or be bookable until activated: `GET /doctors` leaves them out, booking returns 409 "This doctor isn't
+  accepting appointments.", and support doctor search shows them marked "(inactive)".
 - **AUTH-REGD-05** Audit: `users` INSERT `{role: "DOCTOR", is_active: false, via: "self_registration"}`, performed
   by the new user.
 - Admin-created doctors ([19](19-admin-user-registration.md)) are active immediately.

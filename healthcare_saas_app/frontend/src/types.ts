@@ -73,6 +73,8 @@ export interface SupportDoctorRow {
   email: string;
   specialty: string;
   license_number: string;
+  /** False while the doctor's login is deactivated (e.g. awaiting approval): listed, but can't be booked. */
+  is_active?: boolean;
 }
 
 /** An appointment as listed for support staff (GET /support/appointments). */

@@ -89,12 +89,12 @@ async def support_search_doctors(
     identity: CurrentIdentity = Depends(require_roles("SUPPORT_STAFF")),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    """Find doctors of this clinic by part of their name or phone number."""
+    """Find doctors of this clinic by part of their name, email or phone number."""
 
     stmt = (
         select(Doctor, User.email)
         .join(User, User.id == Doctor.user_id)
-        .where(Doctor.tenant_id == identity.tenant_id, Doctor.deleted_at.is_(None), name_phone_or_email_matches(q, Doctor))
+        .where(Doctor.tenant_id == identity.tenant_id, Doctor.deleted_at.is_(None), name_phone_or_email_matches(q, Doctor, User.email))
         .order_by(Doctor.full_name.asc())
         .limit(search_limit(q))
     )
@@ -118,7 +118,7 @@ async def support_search_patients(
     identity: CurrentIdentity = Depends(require_roles("SUPPORT_STAFF")),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    """Find patients by part of their name or phone number (contact details only, no medical data).
+    """Find patients by part of their name, email or phone number (contact details only, no medical data).
 
     Phone matching ignores formatting, so "555-123" finds "(555) 123-4567".
     """
@@ -126,7 +126,7 @@ async def support_search_patients(
     stmt = (
         select(Patient, User.email)
         .join(User, User.id == Patient.user_id)
-        .where(Patient.tenant_id == identity.tenant_id, Patient.deleted_at.is_(None), name_phone_or_email_matches(q, Patient))
+        .where(Patient.tenant_id == identity.tenant_id, Patient.deleted_at.is_(None), name_phone_or_email_matches(q, Patient, User.email))
         .order_by(Patient.full_name.asc())
         .limit(search_limit(q))
     )

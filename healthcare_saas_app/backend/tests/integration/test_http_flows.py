@@ -181,12 +181,14 @@ class HttpFlowTests(unittest.TestCase):
         self.assertEqual(self.ok("PUT", "/support/profile", staff, {"full_name": "Samuel Support", "phone": "555 222 3333"})["full_name"], "Samuel Support")
         self.assertEqual(self.call("PUT", "/support/profile", staff, {"full_name": "Sa", "phone": "12"})[0], 422)
 
-        # Searches: name, formatting-free phone, "*" for everyone, too-short query
+        # Searches: name, formatting-free phone, email (any case), "*" for everyone, too-short query
         self.assertEqual([p["name"] for p in self.ok("GET", "/support/patients?q=steve", staff)], ["Steve Works"])
         self.assertEqual([p["name"] for p in self.ok("GET", "/support/patients?q=555-010", staff)], ["Steve Works"])
+        self.assertEqual([p["name"] for p in self.ok("GET", "/support/patients?q=PAULA@http", staff)], ["Paula Patient"])
         self.assertEqual([p["name"] for p in self.ok("GET", "/support/patients?q=*", staff)], ["Paula Patient", "Steve Works"])
         self.assertEqual([d["name"] for d in self.ok("GET", "/support/doctors?q=%2A", staff)], ["Dr One", "Dr Two"])
         self.assertEqual([d["name"] for d in self.ok("GET", "/support/doctors?q=555-0199", staff)], ["Dr Two"])
+        self.assertEqual([d["name"] for d in self.ok("GET", "/support/doctors?q=doc1@", staff)], ["Dr One"])
         self.assertEqual(self.call("GET", "/support/patients?q=s", staff)[0], 422)
 
         patient_id = self.ok("GET", "/support/patients?q=steve", staff)[0]["id"]

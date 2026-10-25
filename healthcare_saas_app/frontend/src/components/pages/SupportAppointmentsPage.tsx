@@ -4,7 +4,7 @@
  * ("doctor" mode): book new appointments, edit the reason, reschedule and cancel.
  */
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import { isAppointmentUpcoming, parseErrorMessage, parseServerDate } from "../../utils";
 import type { SupportAppointmentRow } from "../../types";
@@ -32,7 +32,10 @@ const inputStyle: React.CSSProperties = {
   backgroundColor: 'rgba(9, 35, 55, 0.82)',
   color: '#eef8ff'
 };
-const actionButton = (color: string, busy = false): React.CSSProperties => ({
+// Keeps scrolled-to sections clear of the sticky top bar
+const scrollTarget: React.CSSProperties = { scrollMarginTop: '90px' };
+const scrollIntoView = (el: HTMLElement | null) => el?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+const actionButton =(color: string, busy = false): React.CSSProperties => ({
   background: busy ? '#94a3b8' : color,
   color: 'white',
   border: 'none',
@@ -45,9 +48,6 @@ const actionButton = (color: string, busy = false): React.CSSProperties => ({
 
 export function SupportAppointmentsPage({ auth, mode }: SupportAppointmentsPageProps) {
   const token: string = auth.session.accessToken;
-  const [patients, setPatients] = useState<Person[]>([]);
-  const [doctors, setDoctors] = useState<Person[]>([]);
-  const [loadError, setLoadError] = useState("");
   const [selectedId, setSelectedId] = useState("");
   const [rows, setRows] = useState<SupportAppointmentRow[]>([]);
   const [loadingRows, setLoadingRows] = useState(false);
@@ -55,33 +55,42 @@ export function SupportAppointmentsPage({ auth, mode }: SupportAppointmentsPageP
   const [rescheduleTarget, setRescheduleTarget] = useState<RescheduleTarget | null>(null);
 
   // Booking form: the counterpart is a doctor in patient mode, a patient in doctor mode
-  const [counterpartId, setCounterpartId] = useState("");
+  const [counterpart, setCounterpart] = useState<Person | null>(null);
+  const counterpartId = counterpart?.id ?? "";
   const [reason, setReason] = useState("");
   const [slotKey, setSlotKey] = useState<string | null>(null);
   const [booking, setBooking] = useState(false);
   const [calendarRefresh, setCalendarRefresh] = useState(0);
+  // The appointment just booked: highlighted and scrolled to in the upcoming list
+  const [justBookedId, setJustBookedId] = useState<string | null>(null);
+  // Bumped after a booking to remount (and so clear) both search panels
+  const [searchReset, setSearchReset] = useState(0);
 
   // The patient/doctor being managed, picked from the name/phone search results
   const [subject, setSubject] = useState<Person | null>(null);
 
+  // Picking a person scrolls the page down to what comes next
+  const upcomingRef = useRef<HTMLDivElement>(null);
+  const bookingDetailsRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (subject) scrollIntoView(upcomingRef.current); }, [subject]);
+  useEffect(() => { if (counterpart) scrollIntoView(bookingDetailsRef.current); }, [counterpart]);
+  // After booking, scroll back up to the new appointment (set only once the list has reloaded)
   useEffect(() => {
-    // The booking form picks the counterpart from a dropdown: doctors in patient mode, patients in doctor mode
-    const load = mode === "patient"
-      ? api.listDoctors(token).then(rows => setDoctors(rows.map(d => ({ id: d.id, name: d.name, detail: d.specialty || 'General Practice' }))))
-      : api.listPatients(token).then(rows => setPatients(rows.map(p => ({ id: p.id, name: p.name, detail: p.phone })).sort((a, b) => a.name.localeCompare(b.name))));
-    load.catch((err) => {
-      console.error("Failed to load booking list:", err);
-      setLoadError(mode === "patient" ? "Failed to load doctors." : "Failed to load patients.");
-    });
-  }, [token, mode]);
+    if (!justBookedId) return;
+    const row = upcomingRef.current?.querySelector<HTMLElement>(`[data-appointment-id="${justBookedId}"]`);
+    scrollIntoView(row ?? upcomingRef.current);
+  }, [justBookedId]);
 
   const pickSubject = (person: Person) => {
     setSubject(person);
     setSelectedId(person.id);
   };
 
-  const counterparts = mode === "patient" ? doctors : patients;
-  const counterpart = counterparts.find(c => c.id === counterpartId);
+  const pickCounterpart = (person: Person) => {
+    setCounterpart(person);
+    setSlotKey(null);
+  };
+
   const bookingDoctorId = mode === "patient" ? counterpartId : selectedId;
   const bookingPatientId = mode === "patient" ? selectedId : counterpartId;
 
@@ -104,9 +113,10 @@ export function SupportAppointmentsPage({ auth, mode }: SupportAppointmentsPageP
 
   useEffect(() => {
     loadRows();
-    setCounterpartId("");
+    setCounterpart(null);
     setSlotKey(null);
     setReason("");
+    setJustBookedId(null);
   }, [selectedId, mode]);
 
   const refreshAfterChange = async () => {
@@ -157,7 +167,7 @@ export function SupportAppointmentsPage({ auth, mode }: SupportAppointmentsPageP
     setBooking(true);
     try {
       // slotKey is a naive local-time cell key; convert to UTC for the API
-      await api.bookAppointment(token, {
+      const booked = await api.bookAppointment(token, {
         doctor_id: bookingDoctorId,
         patient_id: bookingPatientId,
         slot: new Date(slotKey).toISOString(),
@@ -167,6 +177,10 @@ export function SupportAppointmentsPage({ auth, mode }: SupportAppointmentsPageP
       setSlotKey(null);
       setReason("");
       await refreshAfterChange();
+      // Close the search results and calendar, leaving the new appointment in view
+      setCounterpart(null);
+      setSearchReset(k => k + 1);
+      setJustBookedId(booked.id);
     } catch (err) {
       alert(parseErrorMessage(err));
     } finally {
@@ -189,6 +203,7 @@ export function SupportAppointmentsPage({ auth, mode }: SupportAppointmentsPageP
 
       {mode === "patient" ? (
         <SupportSearchPanel
+          key={searchReset}
           kind="patient"
           accessToken={token}
           selectedId={selectedId}
@@ -196,18 +211,18 @@ export function SupportAppointmentsPage({ auth, mode }: SupportAppointmentsPageP
         />
       ) : (
         <SupportSearchPanel
+          key={searchReset}
           kind="doctor"
           accessToken={token}
           selectedId={selectedId}
           onPick={(d) => pickSubject({ id: d.id, name: d.name, detail: d.specialty || 'General Practice' })}
         />
       )}
-      {loadError && <div style={{ color: '#ff90ab', fontSize: '12px' }}>{loadError}</div>}
 
       {subject && (
         <>
           {/* Upcoming appointments */}
-          <div className="card" style={{ padding: '16px' }}>
+          <div ref={upcomingRef} className="card" style={{ padding: '16px', ...scrollTarget }}>
             <h3 style={{ margin: '0 0 16px 0', color: '#eaf5ff' }}>Upcoming Appointments for {subject.name} ({rows.length})</h3>
             {loadingRows ? (
               <p style={{ color: '#b4cce2', textAlign: 'center', padding: '20px' }}>Loading appointments...</p>
@@ -227,7 +242,11 @@ export function SupportAppointmentsPage({ auth, mode }: SupportAppointmentsPageP
                   </thead>
                   <tbody>
                     {rows.map(row => (
-                      <tr key={row.id} style={{ backgroundColor: 'rgba(9, 32, 52, 0.82)' }}>
+                      <tr
+                        key={row.id}
+                        data-appointment-id={row.id}
+                        style={{ backgroundColor: row.id === justBookedId ? 'rgba(40, 167, 69, 0.22)' : 'rgba(9, 32, 52, 0.82)', ...scrollTarget }}
+                      >
                         <td style={cellStyle}>{formatDateTime(parseServerDate(row.appointment_time))}</td>
                         <td style={cellStyle}>{mode === "patient" ? row.doctor_name : row.patient_name}</td>
                         <td style={cellStyle}>{row.reason || 'No notes'}</td>
@@ -269,22 +288,35 @@ export function SupportAppointmentsPage({ auth, mode }: SupportAppointmentsPageP
           <div className="card" style={{ padding: '16px' }}>
             <h3 style={{ margin: '0 0 16px 0', color: '#eaf5ff' }}>Book New Appointment for {subject.name}</h3>
 
+            {/* Keyed by the subject (and searchReset) so switching patient/doctor, or booking, starts a fresh counterpart search */}
             <div style={{ marginBottom: '16px' }}>
-              <label htmlFor="support-counterpart" style={labelStyle}>Select {counterpartLabel} <span style={{ color: '#ff90ab' }}>*</span></label>
-              <select
-                id="support-counterpart"
-                value={counterpartId}
-                onChange={(e) => { setCounterpartId(e.target.value); setSlotKey(null); }}
-                style={inputStyle}
-              >
-                <option value="">Select a {counterpartLabel.toLowerCase()}</option>
-                {counterparts.map(c => (
-                  <option key={c.id} value={c.id}>{c.name}{c.detail ? ` - ${c.detail}` : ''}</option>
-                ))}
-              </select>
+              {mode === "patient" ? (
+                <SupportSearchPanel
+                  key={`${selectedId}-${searchReset}`}
+                  kind="doctor"
+                  embedded
+                  accessToken={token}
+                  selectedId={counterpartId}
+                  onPick={(d) => pickCounterpart({ id: d.id, name: d.name, detail: d.specialty || 'General Practice' })}
+                />
+              ) : (
+                <SupportSearchPanel
+                  key={`${selectedId}-${searchReset}`}
+                  kind="patient"
+                  embedded
+                  accessToken={token}
+                  selectedId={counterpartId}
+                  onPick={(p) => pickCounterpart({ id: p.id, name: p.name, detail: p.phone })}
+                />
+              )}
             </div>
 
-            <div style={{ marginBottom: '16px' }}>
+            <div ref={bookingDetailsRef} style={{ marginBottom: '16px', ...scrollTarget }}>
+              {counterpart && (
+                <p style={{ color: '#eaf5ff', fontSize: '14px', margin: '0 0 12px 0' }}>
+                  Booking with {counterpartLabel.toLowerCase()}: <strong>{counterpart.name}</strong>{counterpart.detail ? ` (${counterpart.detail})` : ''}
+                </p>
+              )}
               <label htmlFor="support-reason" style={labelStyle}>Appointment Reason <span style={{ color: '#ff90ab' }}>*</span></label>
               <textarea
                 id="support-reason"

@@ -1,6 +1,6 @@
 /**
  * Support Search Panel
- * Search box + results table for support staff to find a patient or a doctor by name or phone.
+ * Search box + results table for support staff to find a patient or a doctor by name, email or phone.
  * Clicking a full name picks that person. Used by the support staff appointment and availability screens.
  */
 
@@ -17,6 +17,8 @@ type SupportSearchPanelProps = SearchProps & {
   accessToken: string;
   /** Id of the person currently picked; their row is highlighted. */
   selectedId?: string;
+  /** Render without the card frame, for use inside another card. */
+  embedded?: boolean;
 };
 
 const cellStyle: React.CSSProperties = { padding: '12px', color: '#eef8ff', fontSize: '14px', border: '1px solid rgba(136, 194, 227, 0.36)' };
@@ -51,7 +53,7 @@ const COLUMNS = {
 };
 
 export function SupportSearchPanel(props: SupportSearchPanelProps) {
-  const { kind, accessToken, selectedId } = props;
+  const { kind, accessToken, selectedId, embedded } = props;
   const [searchText, setSearchText] = useState("");
   const [lastQuery, setLastQuery] = useState("");
   const [results, setResults] = useState<Array<SupportPatientRow | SupportDoctorRow> | null>(null);
@@ -63,7 +65,7 @@ export function SupportSearchPanel(props: SupportSearchPanelProps) {
   const handleSearch = async (event: React.FormEvent) => {
     event.preventDefault();
     const q = searchText.trim();
-    const problem = searchQueryProblem(q, "a name or phone number");
+    const problem = searchQueryProblem(q, "a name, email or phone number");
     if (problem) {
       setError(problem);
       return;
@@ -91,7 +93,7 @@ export function SupportSearchPanel(props: SupportSearchPanelProps) {
     kind === "patient" ? COLUMNS.patient.cells(row as SupportPatientRow) : COLUMNS.doctor.cells(row as SupportDoctorRow);
 
   return (
-    <div className="card" style={{ padding: '16px' }}>
+    <div className={embedded ? undefined : "card"} style={embedded ? undefined : { padding: '16px' }}>
       <form onSubmit={handleSearch}>
         <label htmlFor={`support-${noun}-search`} style={{ fontSize: '14px', fontWeight: '700', color: '#d6ebfb', display: 'block', marginBottom: '4px' }}>
           Find {kind === "patient" ? "Patient" : "Doctor"}
@@ -102,7 +104,7 @@ export function SupportSearchPanel(props: SupportSearchPanelProps) {
             type="search"
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
-            placeholder="Enter a name or phone number, or * for everyone"
+            placeholder="Enter a name, email or phone number, or * for everyone"
             autoComplete="off"
             style={inputStyle}
           />

@@ -42,7 +42,12 @@ $FunctionName = "healthcare-migration-runner-temp"
 $RoleName = "healthcare-migration-runner-temp-role"
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)  # PS 5.1's "utf8" adds a BOM that Lambda rejects
 
-if ($SchemaSnapshot) { $Preflight = $true }  # same read-only app-user connection
+if ($SchemaSnapshot) {
+    $Preflight = $true  # same read-only app-user connection
+    # [IO.File] resolves relative paths against the process's start folder, not the PowerShell location
+    # (cd), so a bare "rds.json" used to land in the user's home folder: make it absolute here
+    $SchemaSnapshot = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($SchemaSnapshot)
+}
 if (-not $Preflight -and $MigrationFiles.Count -eq 0) { throw "Pass -MigrationFiles <file.sql> [...] (or -Preflight / -SchemaSnapshot <out.json>)." }
 foreach ($file in $MigrationFiles) {
     if (-not (Test-Path $file)) { throw "Migration file not found: $file" }

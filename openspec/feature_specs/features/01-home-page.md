@@ -15,7 +15,7 @@ Rendered inside `AppLayout` **without** a breadcrumb.
 |-------|---------|--------------------|
 | 1 | `h1` | "Smart Healthcare Management Platform" |
 | 2 | Lead paragraph (class `lead-text`) | "Manage doctors, patients, appointments, prescriptions, and billing from a single unified platform." |
-| 3 | Button row (class `hero-actions`) | "Patient Login" → `/patients/login` (hidden when the signed-in role is PATIENT); "Doctor Login" → `/doctors/login` (always) |
+| 3 | Button row (class `hero-actions`) | "Support Staff Login" → `/support/login` (hidden when the signed-in role is SUPPORT_STAFF); "Patient Login" → `/patients/login` (hidden when the signed-in role is PATIENT); "Doctor Login" → `/doctors/login` (always) |
 | 4 | `h2` | "Latest Medical Breakthroughs" |
 | 5 | Card grid (class `card-grid`) | 5 news cards; while loading, 5 empty skeleton cards (class `skeleton-card`) |
 
@@ -39,8 +39,9 @@ is pluggable. The reference fetcher waits 650 ms and returns these static cards 
 
 ## 4. Acceptance criteria
 
-- **F01-HOME-AC-01** Given a guest, When opening `/`, Then both login buttons are shown and no breadcrumb.
+- **F01-HOME-AC-01** Given a guest, When opening `/`, Then "Support Staff Login", "Patient Login" and "Doctor Login" are shown in that order, with no breadcrumb.
 - **F01-HOME-AC-02** Given a signed-in patient, When opening `/`, Then "Patient Login" is hidden.
+- **F01-HOME-AC-04** Given signed-in support staff, When opening `/`, Then "Support Staff Login" is hidden.
 - **F01-HOME-AC-03** Given the news is loading, Then 5 skeleton cards are shown; after load, 5 cards with
   "Read more →" links that open a new tab with `noopener`.
 

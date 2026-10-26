@@ -448,7 +448,7 @@ export function App() {
 }
 
 // Page components (these will be moved to separate files in the future)
-function HomePage({ auth, userData }: any) {
+export function HomePage({ auth, userData }: any) {
   const newsQuery = useMedicalNewsAgent();
   const navigate = useNavigate();
   
@@ -457,6 +457,9 @@ function HomePage({ auth, userData }: any) {
       <h1>Smart Healthcare Management Platform</h1>
       <p className="lead-text">Manage doctors, patients, appointments, prescriptions, and billing from a single unified platform.</p>
       <div className="hero-actions">
+        {auth.session.role !== "SUPPORT_STAFF" && (
+          <button onClick={() => navigate("/support/login")}>Support Staff Login</button>
+        )}
         {auth.session.role !== "PATIENT" && (
           <button onClick={() => navigate("/patients/login")}>Patient Login</button>
         )}

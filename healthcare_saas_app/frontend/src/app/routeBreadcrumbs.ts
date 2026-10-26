@@ -28,6 +28,7 @@ const routeLabelMap: Array<{ test: (path: string) => boolean; label: string }> =
   { test: (path) => path === "/support/patient-appointments", label: "Home > Support Staff > Patient Appointments" },
   { test: (path) => path === "/support/doctor-appointments", label: "Home > Support Staff > Doctor Appointments" },
   { test: (path) => path === "/support/doctor-availability", label: "Home > Support Staff > Doctor Availability" },
+  { test: (path) => path === "/support/needs-reschedule", label: "Home > Support Staff > Needs Reschedule" },
   { test: (path) => path === "/support/profile", label: "Home > Support Staff > Update Profile" },
   { test: (path) => path === "/forgot-password", label: "Home > Forgot Password" },
   { test: (path) => path === "/reset-password", label: "Home > Reset Password" },

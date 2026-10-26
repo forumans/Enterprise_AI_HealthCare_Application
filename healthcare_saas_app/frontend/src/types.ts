@@ -89,6 +89,71 @@ export interface SupportAppointmentRow {
   doctor_name: string;
 }
 
+/** One hourly slot of GET /doctor/availability/{id}/all. Block fields are sent to doctors and staff only. */
+export interface AvailabilitySlot {
+  slot_time: string;
+  status: "AVAILABLE" | "BOOKED" | "BLOCKED";
+  block_id?: string | null;
+  block_reason?: string | null;
+  /** Booked, but the doctor has since blocked the hour: support staff should reschedule it. */
+  needs_reschedule?: boolean;
+}
+
+export type BlockReasonCategory = "VACATION" | "CONFERENCE" | "SICK" | "PERSONAL" | "ADMINISTRATIVE" | "OTHER";
+
+/** What a range block/unblock would do (preview), or did (apply). Times are UTC. */
+export interface RangePreview {
+  mode: "block" | "unblock";
+  start: string;
+  end: string;
+  slots_to_create: number;
+  created_blocked: number;
+  to_block: number;
+  already_blocked: number;
+  to_flag: number;
+  already_flagged: number;
+  to_open: number;
+  already_open: number;
+  to_unflag: number;
+  days_to_fill: number;
+  appointments: Array<{ appointment_id: string; appointment_time: string; patient_name: string; status: string; needs_reschedule: boolean }>;
+  /** Sent back to apply: the server refuses (409) if the schedule changed since this preview. */
+  fingerprint: string;
+}
+
+/** A doctor's range block (GET /doctor/availability/{id}/blocks). */
+export interface ScheduleBlockRow {
+  id: string;
+  start: string;
+  end: string;
+  reason_category: BlockReasonCategory;
+  reason_label: string;
+  reason_note: string | null;
+  created_at: string;
+  released_at: string | null;
+  state: "ACTIVE" | "PARTIALLY_RELEASED" | "RELEASED";
+  blocked_hours: number;
+  needs_reschedule: number;
+  opened_hours: number;
+}
+
+/** An appointment in the support staff "Needs Reschedule" queue (GET /support/reschedule-queue). */
+export interface RescheduleQueueRow {
+  id: string;
+  appointment_time: string;
+  status: string;
+  /** Within the next 24 hours. */
+  urgent: boolean;
+  doctor_id: string;
+  doctor_name: string;
+  patient_id: string;
+  patient_name: string;
+  patient_phone: string;
+  patient_email: string;
+  reason_category: BlockReasonCategory | null;
+  reason_label: string;
+}
+
 export interface DoctorAppointmentRow {
   id: string;
   patient_name?: string;

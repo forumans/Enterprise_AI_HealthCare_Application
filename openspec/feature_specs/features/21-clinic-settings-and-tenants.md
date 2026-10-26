@@ -39,10 +39,13 @@ Inside one transaction, with the tenant row locked (`FOR UPDATE`):
 1. If the new zone equals the old one → nothing moves (`slots_moved = 0`).
 2. Load every slot of the tenant with `slot_time > now`.
 3. Split into **booked** (`BOOKED`) and **movable** (`AVAILABLE`, `BLOCKED`).
-4. Build new rows: for each movable slot, same status and `block_reason`, at
-   `same_wall_clock(slot_time, old_tz, new_tz)`; for each booked slot, an `AVAILABLE` row (no reason) at the same
-   local hour in the new zone — so the doctor's working hours are unchanged while the booked slot stays at its
-   exact instant.
+4. Build new rows: for each movable slot, same status, `block_reason` and `block_id`, at
+   `same_wall_clock(slot_time, old_tz, new_tz)`; for each booked slot, a row at the same local hour in the new
+   zone — so the doctor's working hours are unchanged while the booked slot stays at its exact instant. That
+   reopened hour follows the release rule (F02 `DATA-TRG-02`): `BLOCKED` with the booked slot's `block_id` and
+   reason when it had one (a "Needs reschedule" appointment), else `AVAILABLE` with no reason.
+   Range blocks (`schedule_blocks`) of the tenant that are not released and end after now move the same way
+   (`start_time`/`end_time` by `same_wall_clock`), so "Unblock all" still covers their slots (`BR-TIME-06`).
 5. Drop new rows that would be in the past.
 6. Delete the movable slots; insert the new rows in batches of 1,000 (`ON CONFLICT DO NOTHING`, so a new row that
    collides with an existing slot — e.g. a booked one — is dropped).
@@ -71,6 +74,10 @@ There is **no** tenant-creation endpoint (clinics are created by the platform op
 - **F21-AC-01** Given a New York clinic with a blocked 10 AM ET slot ("Vacation") and a booked 2 PM ET appointment,
   When changed to `America/Los_Angeles`, Then the blocked slot is at 10 AM PT with its reason, the appointment keeps
   its instant (11 AM PT), and a 2 PM PT slot is `AVAILABLE`.
+- **F21-AC-07** Given a New York clinic with a range block 9 AM–5 PM ET over a booked 2 PM ET appointment, When
+  changed to `America/Los_Angeles`, Then 9 AM–5 PM PT is still blocked under the same block (the block record now
+  reads 9 AM–5 PM PT), the appointment keeps its instant and stays flagged, and the reopened 2 PM PT hour is
+  `BLOCKED`, not `AVAILABLE`.
 - **F21-AC-02** Given `Mars/Olympus_Mons`, Then 422 and nothing changes.
 - **F21-AC-03** Given clinic B, When clinic A changes zone, Then B's slots and zone are unchanged.
 - **F21-AC-04** Given success, Then every time on the admin's screens immediately uses the new zone.

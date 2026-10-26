@@ -42,6 +42,7 @@ None. Every gap found in the review is fixed (§2). Add new ones here as they ar
 | GAP-24 | `811f9b1` | Doctor appointment details refuse any non-UUID id with 400. |
 | GAP-25 | `811f9b1` | Rate-limit counters live in PostgreSQL (migration 009), shared by all instances; in-memory fallback before the migration. |
 | GAP-26 | `811f9b1` | The patient appointments page loads the appointment list once. |
+| GAP-27 | change `range-slot-blocking` (migration 010) | A cancelled or moved appointment's slot always became `AVAILABLE`, so an hour the doctor wanted blocked could be booked; and any later update or delete of an already-cancelled appointment re-ran the trigger and could free a slot another patient had booked since. The trigger and `reschedule_appointment` now apply the release rule (F02 `DATA-TRG-02`), only on the change into `CANCELLED` and only for a `BOOKED` slot. |
 
 IDs are never reused.
 

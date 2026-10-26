@@ -36,6 +36,21 @@ class RoleAccessTests(unittest.TestCase):
         self.assertEqual(_allowed_roles("/api/support/profile", "GET"), {"SUPPORT_STAFF"})
         self.assertEqual(_allowed_roles("/api/support/profile", "PUT"), {"SUPPORT_STAFF"})
 
+    def test_range_blocks_are_for_doctors_and_support_staff(self):
+        # Ownership (a doctor only their own slots) is checked in the handler, see test_range_blocking.py
+        for path, method in [
+            ("/api/doctor/availability/{doctor_id}/blocks/preview", "POST"),
+            ("/api/doctor/availability/{doctor_id}/blocks", "POST"),
+            ("/api/doctor/availability/{doctor_id}/unblock/preview", "POST"),
+            ("/api/doctor/availability/{doctor_id}/unblock", "POST"),
+            ("/api/doctor/availability/{doctor_id}/blocks", "GET"),
+        ]:
+            with self.subTest(path=path, method=method):
+                self.assertEqual(_allowed_roles(path, method), {"DOCTOR", "SUPPORT_STAFF"})
+
+    def test_reschedule_queue_is_for_support_staff_and_admins(self):
+        self.assertEqual(_allowed_roles("/api/support/reschedule-queue", "GET"), {"SUPPORT_STAFF", "ADMIN"})
+
     def test_only_admins_change_passwords_and_emails(self):
         self.assertEqual(_allowed_roles("/api/admin/users/search", "GET"), {"ADMIN"})
         self.assertEqual(_allowed_roles("/api/admin/users/{user_id}/reset-password", "POST"), {"ADMIN"})

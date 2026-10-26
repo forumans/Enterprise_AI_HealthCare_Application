@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getMainMenuFromPath, submenuMap } from "./menu";
+import { getMainMenuFromPath, menuItemLabel, submenuMap } from "./menu";
 
 describe("Support Staff menu", () => {
   it("maps /support routes to the Support Staff menu", () => {
@@ -15,8 +15,18 @@ describe("Support Staff menu", () => {
       ["/support/patient-appointments", "SUPPORT_STAFF"],
       ["/support/doctor-appointments", "SUPPORT_STAFF"],
       ["/support/doctor-availability", "SUPPORT_STAFF"],
+      ["/support/needs-reschedule", "SUPPORT_STAFF"],
       ["/support/profile", "SUPPORT_STAFF"],
     ]);
+  });
+
+  it("shows the Needs Reschedule count only when there is something to do", () => {
+    const item = submenuMap["Support Staff"].find(i => i.to === "/support/needs-reschedule")!;
+    expect(menuItemLabel(item, { rescheduleQueue: 3 })).toBe("Needs Reschedule (3)");
+    expect(menuItemLabel(item, { rescheduleQueue: 0 })).toBe("Needs Reschedule");
+    expect(menuItemLabel(item, {})).toBe("Needs Reschedule");
+    const plain = submenuMap["Support Staff"].find(i => i.to === "/support/profile")!;
+    expect(menuItemLabel(plain, { rescheduleQueue: 3 })).toBe("Update Profile");
   });
 
   it("lists System Dashboard first in the Admin menu after login", () => {

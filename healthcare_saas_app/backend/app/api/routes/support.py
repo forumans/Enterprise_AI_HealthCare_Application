@@ -6,17 +6,25 @@ endpoints, which accept the SUPPORT_STAFF role.
 
 from __future__ import annotations
 
+from datetime import timedelta
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.database import get_db
 from ...core.dependencies import CurrentIdentity, require_roles
-from ...core.timeutils import clinic_day_start, clinic_today
-from ...models import Appointment, Doctor, Patient, SupportStaff, User
+from ...core.timeutils import clinic_day_start, clinic_today, utc_now
+from ...models import Appointment, Doctor, DoctorAvailability, Patient, ScheduleBlock, SupportStaff, User
+from ...models.schedule_block import BLOCK_REASON_CATEGORIES
 from ...services.audit_service import write_audit_log
+from ...services.availability_service import LIVE_APPOINTMENT_STATUSES
 from ..search_utils import name_phone_or_email_matches, search_limit
+
+# Queue items this close are marked "Urgent"
+URGENT_WITHIN = timedelta(hours=24)
 
 router = APIRouter(prefix="/support")
 
@@ -192,4 +200,69 @@ async def support_list_appointments(
             "doctor_name": doctor.full_name,
         }
         for appointment, patient, doctor in rows
+    ]
+
+
+@router.get("/reschedule-queue")
+async def reschedule_queue(
+    doctor_id: str | None = None,
+    identity: CurrentIdentity = Depends(require_roles("SUPPORT_STAFF", "ADMIN")),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """Upcoming live appointments whose hour the doctor has blocked ("Needs reschedule"), soonest first.
+
+    Derived from the slot (BOOKED with a block_id), so an appointment leaves the queue as soon as it is
+    moved, cancelled or its hour unblocked. Those within 24 hours are marked urgent.
+    """
+
+    now = utc_now()
+    stmt = (
+        select(Appointment, Patient, User.email, Doctor, ScheduleBlock.reason_category)
+        .join(
+            DoctorAvailability,
+            and_(
+                DoctorAvailability.doctor_id == Appointment.doctor_id,
+                DoctorAvailability.slot_time == Appointment.appointment_time,
+            ),
+        )
+        .join(Patient, Patient.id == Appointment.patient_id)
+        .outerjoin(User, User.id == Patient.user_id)
+        .join(Doctor, Doctor.id == Appointment.doctor_id)
+        .outerjoin(ScheduleBlock, ScheduleBlock.id == DoctorAvailability.block_id)
+        .where(
+            Appointment.tenant_id == identity.tenant_id,
+            Appointment.deleted_at.is_(None),
+            Appointment.status.in_(LIVE_APPOINTMENT_STATUSES),
+            Appointment.appointment_time > now,
+            DoctorAvailability.status == "BOOKED",
+            DoctorAvailability.block_id.is_not(None),
+            Patient.deleted_at.is_(None),
+            Doctor.deleted_at.is_(None),
+        )
+        .order_by(Appointment.appointment_time.asc())
+    )
+    if doctor_id:
+        try:
+            UUID(doctor_id)
+        except ValueError:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid doctor_id.")
+        stmt = stmt.where(Appointment.doctor_id == doctor_id)
+
+    rows = (await db.execute(stmt)).all()
+    return [
+        {
+            "id": appointment.id,
+            "appointment_time": appointment.appointment_time.isoformat(),
+            "status": appointment.status,
+            "urgent": appointment.appointment_time - now <= URGENT_WITHIN,
+            "doctor_id": doctor.id,
+            "doctor_name": doctor.full_name,
+            "patient_id": patient.id,
+            "patient_name": patient.full_name,
+            "patient_phone": patient.phone or "",
+            "patient_email": email or "",
+            "reason_category": category,
+            "reason_label": BLOCK_REASON_CATEGORIES.get(category, category) if category else "",
+        }
+        for appointment, patient, email, doctor, category in rows
     ]

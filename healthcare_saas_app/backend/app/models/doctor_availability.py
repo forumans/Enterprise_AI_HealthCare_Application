@@ -31,4 +31,8 @@ class DoctorAvailability(Base):
         server_default=text("'AVAILABLE'"),
     )
     block_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # The range block that wants this hour blocked (migration 010). BOOKED + block_id = needs rescheduling.
+    block_id: Mapped[Optional[str]] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("schedule_blocks.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"), nullable=False)

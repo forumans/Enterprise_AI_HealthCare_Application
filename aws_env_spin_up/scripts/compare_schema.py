@@ -6,7 +6,8 @@
 
 Runs schema_snapshot.sql against the local database from healthcare_saas_app/backend/.env (as
 the app user, read-only) and prints what differs: columns, enum values, indexes, constraints,
-triggers, functions, row-level security (tables and policies), extensions, schemas and the app user's table access. Exit code 1 if they differ.
+triggers, functions, row-level security (tables and policies), extensions, which migrations are applied
+(migrations_applied, e.g. 010_schedule_blocks), schemas and the app user's table access. Exit code 1 if they differ.
 """
 
 import asyncio
@@ -19,7 +20,7 @@ from dotenv import dotenv_values
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
-KEYS = ["columns", "enums", "indexes", "constraints", "triggers", "functions", "rls_tables", "policies", "extensions", "schemas", "app_user_missing_access"]
+KEYS = ["columns", "enums", "indexes", "constraints", "triggers", "functions", "rls_tables", "policies", "extensions", "migrations_applied", "schemas", "app_user_missing_access"]
 
 
 async def local_snapshot() -> dict:

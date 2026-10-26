@@ -140,3 +140,23 @@ def default_slot_times(tz: ZoneInfo, now: datetime | None = None, days: int = DE
             if slot > now_utc:
                 slots.append(slot)
     return slots
+
+
+def office_hour_slots_in_range(start: datetime, end: datetime, tz: ZoneInfo) -> list[datetime]:
+    """Office-hour slot starts (8 AM-11 PM clinic time) in the half-open range [start, end), as aware UTC.
+
+    Walks clinic-local dates, so each local office hour appears exactly once across daylight-saving changes.
+    """
+
+    start_utc, end_utc = to_utc(start), to_utc(end)
+    if end_utc <= start_utc:
+        return []
+    slots: list[datetime] = []
+    day, last_day = clinic_date(start_utc, tz), clinic_date(end_utc, tz)
+    while day <= last_day:
+        for hour in range(WORKDAY_FIRST_SLOT_HOUR, WORKDAY_LAST_SLOT_HOUR + 1):
+            slot = datetime(day.year, day.month, day.day, hour, tzinfo=tz).astimezone(UTC)
+            if start_utc <= slot < end_utc:
+                slots.append(slot)
+        day += timedelta(days=1)
+    return slots

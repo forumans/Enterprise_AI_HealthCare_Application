@@ -18,7 +18,16 @@ from ...core.database import get_db
 from ...models import Admin, Appointment, Doctor, DoctorAvailability, Patient, User
 from ...core.security import hash_password
 from ...core.timeutils import clinic_day_bounds, clinic_today, clinic_week_bounds, is_valid_timezone, parse_client_datetime, utc_now
-from ...services.availability_service import ensure_default_slots
+from ...services.availability_service import (
+    apply_block,
+    apply_unblock,
+    ensure_default_slots,
+    list_blocks,
+    lock_doctor_schedule,
+    plan_range_change,
+    release_finished_blocks,
+    validate_block_reason,
+)
 from ...services.account_service import ensure_email_available
 from ...services.audit_service import write_audit_log
 from ...services.tenant_service import resolve_registration_tenant, set_clinic_timezone
@@ -361,22 +370,23 @@ async def list_all_availability(
     
     # Create a map of slot_time to appointment
     appointment_map = {apt.appointment_time: apt for apt in appointment_rows}
-    
-    # Build response with status information
+
+    # Block details are for doctors and staff; patients only see that an hour isn't offered
+    staff_view = (identity.role or "").upper() in {"DOCTOR", "SUPPORT_STAFF", "ADMIN"}
+
     result = []
     for row in availability_rows:
-        # Check if there's an active appointment for this slot
-        if row.slot_time in appointment_map:
-            result.append({
-                "slot_time": row.slot_time.isoformat(), 
-                "status": "BOOKED"  # Slot is booked by an active appointment
-            })
-        else:
-            result.append({
-                "slot_time": row.slot_time.isoformat(), 
-                "status": row.status  # Use the availability status (AVAILABLE or BLOCKED)
-            })
-    
+        # A slot with an active appointment is booked, whatever its stored status
+        booked = row.slot_time in appointment_map
+        slot = {"slot_time": row.slot_time.isoformat(), "status": "BOOKED" if booked else row.status}
+        if staff_view:
+            slot.update(
+                block_id=row.block_id,
+                block_reason=row.block_reason if row.status != "AVAILABLE" else None,
+                needs_reschedule=bool(booked and row.block_id),
+            )
+        result.append(slot)
+
     return result
 
 
@@ -417,7 +427,10 @@ async def delete_availability(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot modify a patient-booked slot.")
 
     await _audit_slot(db, identity, availability, "DELETE", availability.status)
+    block_id = availability.block_id
     await db.delete(availability)
+    await db.flush()
+    await release_finished_blocks(db, {block_id} if block_id else set(), identity.user_id)
     await db.commit()
     return {"message": "Availability deleted successfully"}
 
@@ -602,12 +615,16 @@ async def upsert_doctor_availability(
 
     _check_slot_window(slot_time)
 
+    # A one-hour range change: serialized with range actions, row locked against a concurrent booking
+    await lock_doctor_schedule(db, doctor.id)
     existing = (
         await db.execute(
-            select(DoctorAvailability).where(
+            select(DoctorAvailability)
+            .where(
                 DoctorAvailability.doctor_id == doctor.id,
                 DoctorAvailability.slot_time == slot_time,
             )
+            .with_for_update()
         )
     ).scalar_one_or_none()
 
@@ -629,10 +646,14 @@ async def upsert_doctor_availability(
             # If slot exists but is booked, don't allow change
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot modify a patient-booked slot.")
         elif existing.status == "BLOCKED":
-            # Unblock the slot
+            # Unblock the slot, taking it out of its range block (released once none of its hours are left)
+            block_id = existing.block_id
             existing.status = "AVAILABLE"
             existing.block_reason = None
+            existing.block_id = None
             await _audit_slot(db, identity, existing, "UPDATE", "BLOCKED")
+            await db.flush()
+            await release_finished_blocks(db, {block_id} if block_id else set(), identity.user_id)
             await db.commit()
             return {"message": "Slot unblocked successfully"}
     else:
@@ -661,6 +682,121 @@ async def upsert_doctor_availability(
             await db.commit()
             return {"message": "Slot blocked successfully"}
     return {"message": "Availability updated."}
+
+
+class RangeRequest(BaseModel):
+    start: str = Field(description="ISO datetime (UTC) of the first hour, inclusive")
+    end: str = Field(description="ISO datetime (UTC) where the range ends, exclusive")
+    fingerprint: str | None = Field(default=None, max_length=128, description="From the preview; required to apply")
+
+
+class BlockRangeRequest(RangeRequest):
+    reason_category: str = Field(min_length=1, max_length=32, description="VACATION, CONFERENCE, SICK, PERSONAL, ADMINISTRATIVE or OTHER")
+    reason_note: str | None = Field(default=None, max_length=500)
+
+
+def _parse_range(payload: RangeRequest) -> tuple[datetime, datetime]:
+    try:
+        return parse_client_datetime(payload.start), parse_client_datetime(payload.end)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid datetime format.") from exc
+
+
+async def _range_doctor(db: AsyncSession, identity: CurrentIdentity, doctor_id: str) -> Doctor:
+    try:
+        UUID(doctor_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Doctor profile not found.")
+    return await _doctor_for_slot_change(db, identity, doctor_id)
+
+
+@router.post("/doctor/availability/{doctor_id}/blocks/preview")
+async def preview_block_range(
+    doctor_id: str,
+    payload: BlockRangeRequest,
+    identity: CurrentIdentity = Depends(require_roles("DOCTOR", "SUPPORT_STAFF")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """What blocking [start, end) would do: slots to create and block, already blocked, booked appointments.
+
+    Changes nothing. Confirm with POST .../blocks and the returned fingerprint.
+    """
+
+    doctor = await _range_doctor(db, identity, doctor_id)
+    validate_block_reason(payload.reason_category.upper(), payload.reason_note)
+    start, end = _parse_range(payload)
+    plan = await plan_range_change(db, doctor, identity.clinic_tz, start, end, "block")
+    return plan.as_dict()
+
+
+@router.post("/doctor/availability/{doctor_id}/blocks")
+async def block_range(
+    doctor_id: str,
+    payload: BlockRangeRequest,
+    identity: CurrentIdentity = Depends(require_roles("DOCTOR", "SUPPORT_STAFF")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Block [start, end) as previewed (409 if the schedule changed since). Booked appointments are kept and
+    flagged "Needs reschedule"; none is cancelled."""
+
+    doctor = await _range_doctor(db, identity, doctor_id)
+    start, end = _parse_range(payload)
+    result = await apply_block(
+        db,
+        doctor,
+        identity.clinic_tz,
+        start,
+        end,
+        category=payload.reason_category.upper(),
+        note=payload.reason_note,
+        fingerprint=payload.fingerprint,
+        actor=identity.user_id,
+    )
+    await db.commit()
+    return result
+
+
+@router.post("/doctor/availability/{doctor_id}/unblock/preview")
+async def preview_unblock_range(
+    doctor_id: str,
+    payload: RangeRequest,
+    identity: CurrentIdentity = Depends(require_roles("DOCTOR", "SUPPORT_STAFF")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """What unblocking [start, end) would do: blocked slots to open, appointments to unflag, days to fill."""
+
+    doctor = await _range_doctor(db, identity, doctor_id)
+    start, end = _parse_range(payload)
+    plan = await plan_range_change(db, doctor, identity.clinic_tz, start, end, "unblock")
+    return plan.as_dict()
+
+
+@router.post("/doctor/availability/{doctor_id}/unblock")
+async def unblock_range(
+    doctor_id: str,
+    payload: RangeRequest,
+    identity: CurrentIdentity = Depends(require_roles("DOCTOR", "SUPPORT_STAFF")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Unblock [start, end) as previewed (409 if the schedule changed since). Appointments are not changed."""
+
+    doctor = await _range_doctor(db, identity, doctor_id)
+    start, end = _parse_range(payload)
+    result = await apply_unblock(db, doctor, identity.clinic_tz, start, end, fingerprint=payload.fingerprint, actor=identity.user_id)
+    await db.commit()
+    return result
+
+
+@router.get("/doctor/availability/{doctor_id}/blocks")
+async def list_block_ranges(
+    doctor_id: str,
+    identity: CurrentIdentity = Depends(require_roles("DOCTOR", "SUPPORT_STAFF")),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """The doctor's active and partially released blocks, and those released in the last 30 days."""
+
+    doctor = await _range_doctor(db, identity, doctor_id)
+    return await list_blocks(db, doctor)
 
 
 @router.get("/doctor/profile")

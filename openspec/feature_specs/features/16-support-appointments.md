@@ -1,9 +1,11 @@
 # Feature 16 — Support Staff: Patient Appointments and Doctor Appointments
 
-**Roles:** S · **Routes:** `/support/patient-appointments` (support landing page), `/support/doctor-appointments`
-· **API:** `GET /support/appointments`, `GET /support/patients`, `GET /support/doctors`, `POST /appointments`
-(with `patient_id`), `PATCH /appointments/{id}`, `POST /appointments/{id}/reschedule`, `DELETE /appointments/{id}`,
-`GET /doctor/availability/{id}/all` · **Depends on:** 07, 08, 15, F06 · **Traces to:** `SUP-PA-*`, `SUP-DA-*`
+**Roles:** S · **Routes:** `/support/patient-appointments` (support landing page), `/support/doctor-appointments`,
+`/support/needs-reschedule` · **API:** `GET /support/appointments`, `GET /support/reschedule-queue`,
+`GET /support/patients`, `GET /support/doctors`, `POST /appointments` (with `patient_id`),
+`PATCH /appointments/{id}`, `POST /appointments/{id}/reschedule`, `DELETE /appointments/{id}`,
+`GET /doctor/availability/{id}/all` · **Depends on:** 07, 08, 15, F06 · **Traces to:** `SUP-PA-*`, `SUP-DA-*`,
+`SUP-RQ-*`
 
 ## 1. Purpose
 
@@ -82,6 +84,33 @@ Mounted with a distinct React `key` per mode, so switching routes resets state.
 Booking, reschedule, reason edit and cancel are the shared endpoints of [07](07-appointment-lifecycle.md); the
 audit rows name the staff member as `performed_by`.
 
+## 4a. Needs Reschedule queue (`SUP-RQ`)
+
+When a doctor blocks a range over booked hours ([08](08-doctor-availability.md) `BR-SLOT-17`), the appointments
+stay booked and are flagged "Needs reschedule". Support staff work them from this queue.
+
+- **SUP-RQ-01 Flag.** An appointment *needs rescheduling* when it is live (`SCHEDULED` or `CONFIRMED`, not
+  deleted), in the future, and its slot (`doctor_id`, `slot_time = appointment_time`) is `BOOKED` with a
+  `block_id`. The flag is derived from the slot, never stored, so it clears as soon as the appointment is
+  cancelled or moved, or its hour unblocked. Past and `COMPLETED` appointments are never flagged.
+- **SUP-RQ-02 API `GET /support/reschedule-queue?doctor_id=`** — SUPPORT_STAFF and ADMIN (others 403
+  "Forbidden for this role."). Tenant-scoped (query filter plus RLS). `doctor_id` must be a UUID (else 422
+  "Invalid doctor_id."). Ordered by `appointment_time` ascending, so appointments within 24 hours (marked
+  `urgent: true`) come first. Item `{id, appointment_time, status, urgent, doctor_id, doctor_name, patient_id,
+  patient_name, patient_phone, patient_email, reason_category, reason_label}` (no reason note).
+- **SUP-RQ-03 Screen `/support/needs-reschedule`** (`SupportRescheduleQueuePage`, SUPPORT_STAFF): `h2` "Needs
+  Reschedule"; a Doctor filter ("All doctors" + the doctors in the queue); a table Date & Time (clinic time, with a
+  red "Urgent" tag and row tint when urgent) · Doctor · Patient · Phone · Email · Block Reason · Status · Actions;
+  "No appointments need rescheduling." when empty.
+- **SUP-RQ-04 Actions.** "Reschedule" opens the shared `RescheduleAppointmentModal` (F06); "Cancel" asks the same
+  confirmation as §3 ("Cancel <patient>'s appointment with <doctor> on <time>?") and calls
+  `DELETE /appointments/{id}`. After either the list reloads (the row is gone; its old hour stays `BLOCKED`) and
+  the menu badge refreshes (`hc:reschedule-queue-changed` window event).
+- **SUP-RQ-05 Menu badge.** The Support Staff menu entry "Needs Reschedule" shows the count when above zero
+  ("Needs Reschedule (3)"); the header reloads it on every screen change (F06).
+- **SUP-RQ-06** No message is sent to patients automatically; staff contact them (phase 2: patient emails and
+  contact-attempt tracking).
+
 ## 5. Data support staff may access
 
 | Data | Access |
@@ -89,7 +118,8 @@ audit rows name the staff member as `performed_by`.
 | Patients of the clinic | search; contact and insurance details only |
 | Doctors of the clinic | search; contact, specialty, license |
 | Appointments from today, with names and reasons | read, book, edit reason, reschedule, cancel |
-| Any doctor's slots | read, add, block, unblock ([08](08-doctor-availability.md)) |
+| Any doctor's slots | read, add, block, unblock, range block/unblock with block reasons ([08](08-doctor-availability.md)) |
+| Needs Reschedule queue | read with patient phone and email; reschedule, cancel |
 | Medical records, prescriptions, diagnoses, documents, audit logs | none (403) |
 | Confirming or completing appointments | none |
 
@@ -106,7 +136,17 @@ audit rows name the staff member as `performed_by`.
 - **F16-AC-07** Given a support token, When calling `/patients/search`, `/patient/prescriptions-full`,
   `/medical-records/*` or `/admin/*`, Then 403.
 - **F16-AC-08** Given patient mode, Then the slot picker greys the patient's other upcoming appointment times.
+- **F16-AC-09** Given flagged appointments 6 hours and 5 days away, When staff open Needs Reschedule, Then the
+  6-hour one is first and marked "Urgent"; filtering by the other doctor hides both.
+- **F16-AC-10** Given a queued appointment, When staff reschedule it to an open hour outside the block, Then it
+  leaves the queue and its old hour stays `BLOCKED`.
+- **F16-AC-11** Given a patient or doctor token, When calling `GET /support/reschedule-queue`, Then 403; given
+  staff of clinic A, Then no appointment of clinic B is listed.
+- **F16-AC-12** Given a doctor blocked a range over 3 appointments, When support staff load any support screen,
+  Then the menu shows "Needs Reschedule (3)".
 
 ## 7. Reference implementation
 
-`frontend/src/components/pages/SupportAppointmentsPage.tsx` (+ test), `backend/app/api/routes/support.py`.
+`frontend/src/components/pages/SupportAppointmentsPage.tsx` (+ test), `SupportRescheduleQueuePage.tsx` (+ test),
+`backend/app/api/routes/support.py` (`reschedule_queue`), tests `tests/integration/test_range_blocking.py`,
+`test_row_level_security.py`.

@@ -79,6 +79,9 @@ import {
   SupportProfilePage
 } from "./components/pages/SupportProfilePage";
 import {
+  SupportRescheduleQueuePage
+} from "./components/pages/SupportRescheduleQueuePage";
+import {
   useAppointments,
   useUserData, 
   useNavigation 
@@ -416,6 +419,16 @@ function AppContent() {
               <ProtectedRoute allowed={["SUPPORT_STAFF"]} role={auth.session.role}>
                 <AppLayout session={auth.session} status={auth.status}>
                   <SupportDoctorAvailabilityPage auth={auth} />
+                </AppLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/support/needs-reschedule"
+            element={
+              <ProtectedRoute allowed={["SUPPORT_STAFF"]} role={auth.session.role}>
+                <AppLayout session={auth.session} status={auth.status}>
+                  <SupportRescheduleQueuePage auth={auth} />
                 </AppLayout>
               </ProtectedRoute>
             }

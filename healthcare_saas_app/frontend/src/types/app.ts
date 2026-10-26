@@ -54,6 +54,8 @@ export interface SubmenuItem {
   requiresAuth?: boolean;
   role?: Role;
   hideWhenAuth?: boolean;
+  /** Show a count after the label, e.g. "Needs Reschedule (3)" (the header loads the count). */
+  badge?: "rescheduleQueue";
 }
 
 export type SubmenuMap = {

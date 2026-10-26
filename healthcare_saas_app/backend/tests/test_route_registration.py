@@ -29,6 +29,16 @@ class RouteRegistrationTests(unittest.TestCase):
         self.assertEqual(_handler_for("/api/appointments/3f1c-uuid/reschedule", "POST"), "reschedule_appointment_route")
         self.assertEqual(_handler_for("/api/appointments/3f1c-uuid", "DELETE"), "delete_appointment")
 
+    def test_range_block_routes_are_registered(self):
+        doctor = "/api/doctor/availability/3f1c-uuid"
+        self.assertEqual(_handler_for(f"{doctor}/blocks/preview", "POST"), "preview_block_range")
+        self.assertEqual(_handler_for(f"{doctor}/blocks", "POST"), "block_range")
+        self.assertEqual(_handler_for(f"{doctor}/blocks", "GET"), "list_block_ranges")
+        self.assertEqual(_handler_for(f"{doctor}/unblock/preview", "POST"), "preview_unblock_range")
+        self.assertEqual(_handler_for(f"{doctor}/unblock", "POST"), "unblock_range")
+        self.assertEqual(_handler_for(f"{doctor}/all"), "list_all_availability")
+        self.assertEqual(_handler_for("/api/support/reschedule-queue"), "reschedule_queue")
+
     def test_duplicate_and_legacy_endpoints_are_gone(self):
         # GAP-22: endpoints no screen used, each duplicating a supported one, were removed
         paths = app.openapi()["paths"]

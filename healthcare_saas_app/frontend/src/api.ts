@@ -3,9 +3,14 @@ import type {
   AdminUserRow,
   AdminUserSearchRow,
   AppointmentRow,
+  AvailabilitySlot,
+  BlockReasonCategory,
   DoctorAppointmentRow,
   LoginResponse,
   PatientSearchRow,
+  RangePreview,
+  RescheduleQueueRow,
+  ScheduleBlockRow,
   SupportAppointmentRow,
   SupportDoctorRow,
   SupportPatientRow,
@@ -396,9 +401,52 @@ export const api = {
     },
 
   listAllDoctorAvailability: (doctorId: string, token?: string) =>
-    request<Array<{ slot_time: string; status: "AVAILABLE" | "BOOKED" | "BLOCKED" }>>(`/doctor/availability/${doctorId}/all?days=${30}`, {
+    request<AvailabilitySlot[]>(`/doctor/availability/${doctorId}/all?days=${30}`, {
       method: "GET",
       ...(token && { headers: withAuth(token) }),
+    }),
+
+  /** What blocking [start, end) (UTC ISO) would do; changes nothing. */
+  previewRangeBlock: (token: string, doctorId: string, body: { start: string; end: string; reason_category: BlockReasonCategory; reason_note?: string }) =>
+    request<RangePreview>(`/doctor/availability/${doctorId}/blocks/preview`, {
+      method: "POST",
+      headers: withAuth(token),
+      body: JSON.stringify(body),
+    }),
+
+  /** Block [start, end) as previewed; 409 "The schedule changed..." if it changed since the preview. */
+  applyRangeBlock: (token: string, doctorId: string, body: { start: string; end: string; reason_category: BlockReasonCategory; reason_note?: string; fingerprint: string }) =>
+    request<RangePreview & { message: string; block_id: string | null; needs_reschedule: number }>(`/doctor/availability/${doctorId}/blocks`, {
+      method: "POST",
+      headers: withAuth(token),
+      body: JSON.stringify(body),
+    }),
+
+  previewRangeUnblock: (token: string, doctorId: string, body: { start: string; end: string }) =>
+    request<RangePreview>(`/doctor/availability/${doctorId}/unblock/preview`, {
+      method: "POST",
+      headers: withAuth(token),
+      body: JSON.stringify(body),
+    }),
+
+  applyRangeUnblock: (token: string, doctorId: string, body: { start: string; end: string; fingerprint: string }) =>
+    request<RangePreview & { message: string; released_block_ids: string[] }>(`/doctor/availability/${doctorId}/unblock`, {
+      method: "POST",
+      headers: withAuth(token),
+      body: JSON.stringify(body),
+    }),
+
+  listScheduleBlocks: (token: string, doctorId: string) =>
+    request<ScheduleBlockRow[]>(`/doctor/availability/${doctorId}/blocks`, {
+      method: "GET",
+      headers: withAuth(token),
+    }),
+
+  /** Support staff: upcoming appointments whose hour the doctor has blocked, soonest (urgent) first. */
+  getRescheduleQueue: (token: string, doctorId?: string) =>
+    request<RescheduleQueueRow[]>(`/support/reschedule-queue${doctorId ? `?doctor_id=${encodeURIComponent(doctorId)}` : ""}`, {
+      method: "GET",
+      headers: withAuth(token),
     }),
 
   getCurrentTenant: (token: string) =>

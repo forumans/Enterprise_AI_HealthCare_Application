@@ -7,6 +7,7 @@ so PostgreSQL enforces the tenant policies. Run with HC_TEST_PG_ADMIN_URL pointi
 from __future__ import annotations
 
 import unittest
+from datetime import timedelta
 from types import SimpleNamespace
 
 from fastapi import HTTPException
@@ -18,7 +19,8 @@ from sqlalchemy.pool import NullPool
 from backend.app.api.routes.admin import admin_list_users
 from backend.app.api.routes.auth import LoginRequest, RegisterRequest, login, register
 from backend.app.api.routes.doctor import admin_setup_status
-from backend.app.core import cross_tenant, rate_limit
+from backend.app.api.routes.support import reschedule_queue
+from backend.app.core import cross_tenant, rate_limit, timeutils
 from backend.app.core.security import hash_password
 from backend.app.middleware.request_context import RequestContext, reset_request_context, set_request_context
 from backend.app.models import Patient, User
@@ -98,6 +100,40 @@ class RowLevelSecurityTests(unittest.IsolatedAsyncioTestCase):
             emails = {row["email"] for row in await admin_list_users(page=1, page_size=50, identity=identity, db=s)}
         self.assertIn("patient1@example.test", emails)
         self.assertNotIn("other.patient@example.test", emails)
+
+    async def _flagged_appointment(self, tenant_id: str, user_id: str, patient_id: str, hours_ahead: int) -> str:
+        """A booked slot inside a range block, with its appointment (written as the table owner)."""
+        when = (timeutils.utc_now() + timedelta(hours=hours_ahead)).replace(minute=0, second=0, microsecond=0)
+        conn = await self.db.connect()
+        try:
+            doctor_id = await conn.fetchval(
+                "INSERT INTO doctors (tenant_id, user_id, full_name) VALUES ($1, $2, 'Dr Blocked') RETURNING id", tenant_id, user_id
+            )
+            block_id = await conn.fetchval(
+                "INSERT INTO schedule_blocks (tenant_id, doctor_id, start_time, end_time, reason_category) "
+                "VALUES ($1, $2, $3, $4, 'SICK') RETURNING id",
+                tenant_id, doctor_id, when, when + timedelta(hours=1),
+            )
+            await conn.execute(
+                "INSERT INTO doctor_availability (tenant_id, doctor_id, slot_time, status, block_id) VALUES ($1, $2, $3, 'AVAILABLE', $4)",
+                tenant_id, doctor_id, when, block_id,
+            )
+            return str(await conn.fetchval(
+                "INSERT INTO appointments (tenant_id, doctor_id, patient_id, appointment_time) VALUES ($1, $2, $3, $4) RETURNING id",
+                tenant_id, doctor_id, patient_id, when,
+            ))
+        finally:
+            await conn.close()
+
+    async def test_reschedule_queue_lists_only_its_own_clinic(self):
+        mine = await self._flagged_appointment(self.ids["tenant"], self.ids["admin_user"], self.ids["patient1"], 30)
+        await self._flagged_appointment(self.ids["other_tenant"], self.ids["other_user"], self.ids["other_patient"], 40)
+        self.acting_as(self.ids["tenant"], self.ids["admin_user"])
+        identity = SimpleNamespace(user_id=self.ids["admin_user"], tenant_id=self.ids["tenant"], role="SUPPORT_STAFF")
+        async with self.sessions() as s:
+            queue = await reschedule_queue(doctor_id=None, identity=identity, db=s)
+        self.assertEqual([item["id"] for item in queue], [mine])
+        self.assertEqual(queue[0]["reason_label"], "Sick")
 
     # --- the narrow cross-tenant lookups ----------------------------------------------------------------
 

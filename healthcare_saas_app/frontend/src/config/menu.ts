@@ -3,7 +3,7 @@
  * This module defines the navigation menu structure for different user roles
  */
 
-import type { MainMenu, SubmenuMap } from "../types/app";
+import type { MainMenu, SubmenuItem, SubmenuMap } from "../types/app";
 
 export const submenuMap: SubmenuMap = {
   Home: [],
@@ -29,6 +29,7 @@ export const submenuMap: SubmenuMap = {
     { to: "/support/patient-appointments", label: "Patient Appointments", requiresAuth: true, role: "SUPPORT_STAFF" },
     { to: "/support/doctor-appointments", label: "Doctor Appointments", requiresAuth: true, role: "SUPPORT_STAFF" },
     { to: "/support/doctor-availability", label: "Doctor Availability", requiresAuth: true, role: "SUPPORT_STAFF" },
+    { to: "/support/needs-reschedule", label: "Needs Reschedule", requiresAuth: true, role: "SUPPORT_STAFF", badge: "rescheduleQueue" },
     { to: "/support/profile", label: "Update Profile", requiresAuth: true, role: "SUPPORT_STAFF" },
   ],
   Admin: [
@@ -43,6 +44,12 @@ export const submenuMap: SubmenuMap = {
     { to: "/admin/clinic-settings", label: "Clinic Settings", requiresAuth: true, role: "ADMIN" },
   ],
 };
+
+/** A menu item's label with its count badge when the count is above zero: "Needs Reschedule (3)". */
+export function menuItemLabel(item: SubmenuItem, counts: Partial<Record<NonNullable<SubmenuItem["badge"]>, number>>): string {
+  const count = item.badge ? counts[item.badge] ?? 0 : 0;
+  return count > 0 ? `${item.label} (${count})` : item.label;
+}
 
 /**
  * Determines the main menu based on the current pathname

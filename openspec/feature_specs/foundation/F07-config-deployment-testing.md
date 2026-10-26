@@ -83,6 +83,7 @@ Settings are read once into a frozen `Settings` dataclass. Load order: `.env` (n
 | NFR-SCALE-01 | One DB connection per Lambda environment; RDS `max_connections` sized with reserved concurrency |
 | NFR-REL-01 | Booking, rescheduling and admin (de)activation lock the rows they depend on; unique indexes are the final guard; concurrent attempts give one success and clean 409s |
 | NFR-REL-02 | Default slot generation and migrations are safe to run repeatedly and concurrently |
+| NFR-PERF-04 | A range block of 180 days on an empty schedule (about 2,900 slots) previews and applies in under 5 s (batched inserts, one `UPDATE … WHERE id IN (…)` per status group) |
 | NFR-AVAIL-01 | `/api/health` reports DB connectivity and returns 503 when unreachable |
 | NFR-USAB-01 | Current Chrome, Edge, Firefox, Safari; desktop first, usable at 360 px |
 | NFR-I18N-01 | English (US) text and formats; any IANA clinic zone |
@@ -93,7 +94,7 @@ Settings are read once into a frozen `Settings` dataclass. Load order: `.env` (n
 | Layer | Tooling | Runs | Scope |
 |-------|---------|------|-------|
 | Backend unit | `python -m unittest discover -s backend/tests -t .` (from `healthcare_saas_app/`, inside `.venv`) | always | role guards per route, search helper, validation, time utilities (DST), middleware wiring, token handling, health, login, route registration |
-| Backend integration | `unittest` against a disposable PostgreSQL given by `HC_TEST_PG_ADMIN_URL`; each test creates and drops `hc_it_<random>` from the baseline + migrations; RLS and HTTP suites connect as a non-owner role | when the variable is set | migrations (data preserved, reruns, rollback), slot generation incl. DST and concurrency, booking/cancel/rebook via trigger, double booking, reschedule rules, support flows, admin flows, permissions, clinic time zones, an end-to-end HTTP suite with real Uvicorn |
+| Backend integration | `unittest` against a disposable PostgreSQL given by `HC_TEST_PG_ADMIN_URL`; each test creates and drops `hc_it_<random>` from the baseline + migrations; RLS and HTTP suites connect as a non-owner role | when the variable is set | migrations (data preserved, reruns, rollback), slot generation incl. DST and concurrency, booking/cancel/rebook via trigger, double booking, reschedule rules, range block/unblock (`test_range_blocking.py`: migration 010 idempotent + rollback, release rule, preview/fingerprint, concurrency, 180-day timing — skip that one with `HC_SKIP_SLOW=1`), support flows, admin flows, permissions, clinic time zones, an end-to-end HTTP suite with real Uvicorn |
 | Frontend unit | Vitest + Testing Library + user-event (`npm run test`), browser zone `Asia/Tokyo` | always | pages and components with the API mocked |
 | End-to-end | Playwright (`test_healthcare_saas_app/`) | against running servers | critical journeys in a browser |
 
@@ -120,6 +121,12 @@ Settings are read once into a frozen `Settings` dataclass. Load order: `.env` (n
   weeks; a zone change keeps local slot hours.
 - **TEST-UI-01** Token never written to `localStorage`/`sessionStorage`.
 - **TEST-UI-02** Route guards redirect wrong roles to `/`; menus show only the role's items.
+- **TEST-BR-06** Range blocks: a freed slot of a blocked hour stays `BLOCKED` (trigger and reschedule); a booking
+  racing a block and two overlapping blocks never double-book and give the documented 409s; a range across the
+  autumn DST change blocks each office hour once.
+- **TEST-E2E-01** Playwright `range-blocking.spec.ts`: a doctor blocks a range over a booked appointment → support
+  staff reschedule it from Needs Reschedule → the old hour stays blocked and isn't offered to a patient → the
+  doctor partially unblocks → the remaining appointment is untouched.
 
 ### 5.2 Definition of done for any change
 

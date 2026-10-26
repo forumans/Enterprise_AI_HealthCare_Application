@@ -25,6 +25,19 @@ SELECT json_build_object(
       SELECT format('%s %s: using %s / check %s', tablename, policyname, qual, with_check) AS x
       FROM pg_policies WHERE schemaname = 'public') s),
   'extensions', (SELECT json_agg(x ORDER BY x) FROM (SELECT extname AS x FROM pg_extension) s),
+  -- Migrations whose objects are present (each checked by a table, column or trigger it adds)
+  'migrations_applied', (SELECT coalesce(json_agg(m ORDER BY m), '[]') FROM (VALUES
+      ('005_add_support_staff_role', to_regclass('public.support_staff') IS NOT NULL),
+      ('007_row_level_security', EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'users')),
+      ('008_add_tenant_timezone', EXISTS (SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'tenants' AND column_name = 'timezone')),
+      ('009_rate_limits_and_gender_values', to_regclass('public.rate_limit_events') IS NOT NULL),
+      ('010_schedule_blocks', to_regclass('public.schedule_blocks') IS NOT NULL
+          AND EXISTS (SELECT 1 FROM information_schema.columns
+              WHERE table_schema = 'public' AND table_name = 'doctor_availability' AND column_name = 'block_id')
+          AND EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'schedule_blocks')
+          AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'audit_schedule_blocks'))
+  ) v(m, applied) WHERE applied),
   'schemas', (SELECT json_agg(nspname ORDER BY nspname) FROM pg_namespace
               WHERE nspname NOT LIKE 'pg_%' AND nspname <> 'information_schema'),
   'app_user_missing_access', (SELECT coalesce(json_agg(c.relname ORDER BY c.relname), '[]') FROM pg_class c

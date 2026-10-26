@@ -13,6 +13,8 @@ import {
   parseServerDate, sameDay, weekdayOf, zonedParts, zonedTimeToDate,
 } from "../../utils";
 import { ClinicTimeNote } from "../common/ClinicTimeNote";
+import { RangeBlockPanel } from "../common/RangeBlockPanel";
+import type { AvailabilitySlot } from "../../types";
 import type { SessionState } from "../../types/app";
 
 /** Slots can be changed up to 30 days ahead, so the grid stops at the fifth week (same as the booking grids). */
@@ -81,7 +83,7 @@ function DoctorDetails({ session, auth }: { session: SessionState; auth: any }) 
 
 export function ManageAvailabilityPage({ auth, doctor }: ManageAvailabilityPageProps) {
   const [weekOffset, setWeekOffset] = useState(0);
-  const [availability, setAvailability] = useState<Array<{ slot_time: string; status: "AVAILABLE" | "BOOKED" | "BLOCKED" }>>([]);
+  const [availability, setAvailability] = useState<AvailabilitySlot[]>([]);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState<"success" | "error" | "">("");
@@ -218,6 +220,10 @@ export function ManageAvailabilityPage({ auth, doctor }: ManageAvailabilityPageP
       ) : (
         <DoctorDetails session={auth.session} auth={auth} />
       )}
+
+      {currentDoctor?.id && (
+        <RangeBlockPanel doctorId={currentDoctor.id} accessToken={auth.session.accessToken} onChanged={loadAvailability} />
+      )}
       
       <div className="card" style={{ padding: '20px' }}>
         <div className="calendar-nav" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
@@ -315,11 +321,36 @@ export function ManageAvailabilityPage({ auth, doctor }: ManageAvailabilityPageP
                     
                     const slotAvailability = availability.find(a => clinicSlotKey(parseServerDate(a.slot_time), timeZone) === isoString);
                     const status = slotAvailability?.status || "EMPTY";
+                    // Booked, but the doctor has since blocked the hour: support staff reschedules it
+                    const needsReschedule = status === "BOOKED" && !!slotAvailability?.needs_reschedule;
+                    const reason = slotAvailability?.block_reason || undefined;
                     
                     return (
                       <td key={colIdx} style={{ padding: '8px', textAlign: 'center', minWidth: '120px', verticalAlign: 'top' }}>
-                        {!isSlotPast && (
+                        {!isSlotPast && needsReschedule && (
                           <button
+                            className="time-slot needs-reschedule-slot"
+                            aria-disabled="true"
+                            title={reason ? `Blocked: ${reason}` : "Blocked"}
+                            aria-label={`Booked – Needs reschedule${reason ? ` (blocked: ${reason})` : ""}`}
+                            style={{
+                              backgroundColor: 'rgba(250, 204, 21, 0.18)',
+                              border: '2px dashed #facc15',
+                              color: '#facc15',
+                              fontSize: '12px',
+                              fontWeight: '600',
+                              padding: '8px 4px',
+                              minHeight: '40px',
+                              cursor: 'not-allowed',
+                              borderRadius: '4px'
+                            }}
+                          >
+                            Booked – Needs reschedule
+                          </button>
+                        )}
+                        {!isSlotPast && !needsReschedule && (
+                          <button
+                            title={status === "BLOCKED" && reason ? `Blocked: ${reason}` : undefined}
                             className={`time-slot ${
                               status === "BOOKED" ? "patient-booked-slot" : 
                               status === "BLOCKED" ? "booked-slot" : 

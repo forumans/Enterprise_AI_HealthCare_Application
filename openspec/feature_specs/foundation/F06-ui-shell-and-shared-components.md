@@ -11,8 +11,17 @@ breadcrumbs, and card-based pages. Screen content is in the feature files; this 
   2 px bottom border `#4a90e2`, padding 14 px 24 px, shadow.
 - **Left:** logo (animated "💖" heart emoji, 40 px) and brand text: "Peteti" (name) over "Software Inc." (tagline).
   Brand text is configurable per deployment.
-- **Tenant name** (signed-in users only, from `GET /tenants/current`): positioned right of the brand, max 280 px,
-  single line with ellipsis, full name in a `title` tooltip.
+- **Tenant name** (signed-in users only, from `GET /tenants/current`): in the header's flex flow right of the
+  brand, after a thin divider (never absolutely positioned, so it can't slide under the menu); max 280 px, single
+  line, shortened with an ellipsis when space runs out (the logo, menu and actions keep their size).
+  - **UI-HDR-TENANT-01** It links to the clinic's own site, `https://<tenants.domain>` (`http://` for `localhost`,
+    `*.local`, `*.test`), opened in a new tab (`target="_blank"`, `rel="noopener noreferrer"`) because the sign-in
+    lives in this tab's memory and leaving it would sign the user out. Tooltip "<name> – <domain> (opens in a new
+    tab)". Only a bare host name with an optional port becomes a link (`clinicSiteUrl`); with no usable domain the
+    name is plain text.
+  - **UI-HDR-TENANT-02** Layout by width: above 1024 px one row (brand + name · menu · actions); 1024 px and below
+    the menu moves to its own row; 600 px and below brand + name, then actions, then the menu, each on its own row.
+    The name stays visible at every width.
 - **Center:** main menu buttons "Home", "Doctors", "Patients", "Support Staff", "Admin" (class
   `top-menu-button`; the one matching the current path prefix gets `active-main`: blue `#4a90e2` fill).
   "Home" navigates to `/` and closes menus; the others toggle a floating dropdown under the button. A
@@ -34,12 +43,18 @@ in with that role. Items appear in this order:
 | Patients | Login → `/patients/login`; Register → `/patients/register` | signed out |
 | | Schedule Appointment → `/patients/appointments`; Prescriptions → `/patients/prescriptions`; Billing → `/patients/billing`; Update Profile → `/patients/profile` | PATIENT |
 | Support Staff | Login → `/support/login` | signed out |
-| | Patient Appointments → `/support/patient-appointments`; Doctor Appointments → `/support/doctor-appointments`; Doctor Availability → `/support/doctor-availability`; Update Profile → `/support/profile` | SUPPORT_STAFF |
+| | Patient Appointments → `/support/patient-appointments`; Doctor Appointments → `/support/doctor-appointments`; Doctor Availability → `/support/doctor-availability`; Needs Reschedule → `/support/needs-reschedule` (count badge); Update Profile → `/support/profile` | SUPPORT_STAFF |
 | Admin | Login Admin → `/admin/login` | signed out |
 | | System Dashboard → `/admin/system-dashboard`; Register Doctor → `/admin/register-doctor`; Register Patient → `/admin/register-patient`; Register Admin → `/admin/register-admin`; Register Support Staff → `/admin/register-support-staff`; Reset Password / Email → `/admin/reset-password`; Deactivate → `/admin/deactivate`; Clinic Settings → `/admin/clinic-settings` | ADMIN |
 
 A signed-in user opening another role's menu sees an empty dropdown. The current route's submenu link is
 highlighted (`active-submenu`).
+
+- **UI-MENU-BADGE-01** An item with `badge` shows its count after the label when above zero —
+  `menuItemLabel(item, counts)`, e.g. "Needs Reschedule (3)"; at zero just the label. For support staff the
+  header loads the count from `GET /support/reschedule-queue` (its length) on sign-in and on every route change,
+  and again on the `hc:reschedule-queue-changed` window event; a failed load shows no badge
+  ([16](../features/16-support-appointments.md) `SUP-RQ-05`).
 
 ### 1.3 Page layout (`AppLayout`)
 
@@ -73,6 +88,7 @@ highlighted (`active-submenu`).
 | `/doctors/profile` | DOCTOR | Update Profile | [17](../features/17-profiles.md) |
 | `/support/patient-appointments`, `/support/doctor-appointments` | SUPPORT_STAFF | Patient / Doctor Appointments | [16](../features/16-support-appointments.md) |
 | `/support/doctor-availability` | SUPPORT_STAFF | Doctor Availability | [08](../features/08-doctor-availability.md) |
+| `/support/needs-reschedule` | SUPPORT_STAFF | Needs Reschedule | [16](../features/16-support-appointments.md) §4a |
 | `/support/profile` | SUPPORT_STAFF | Update Profile | [17](../features/17-profiles.md) |
 | `/admin/system-dashboard` | ADMIN | System Dashboard | [18](../features/18-admin-dashboard.md) |
 | `/admin/register-doctor`, `/register-patient`, `/register-admin`, `/register-support-staff` | ADMIN | Registration forms | [19](../features/19-admin-user-registration.md) |
@@ -134,7 +150,7 @@ login form; entering any path containing `/register` clears the login and patien
 | `/patients/appointments` · `/prescriptions` · `/billing` · `/profile` | "Home > Patients > Schedule Appointment" · "… > Prescriptions" · "… > Billing" · "… > Update Profile" |
 | `/doctors/login` · `/register` | "Home > Doctors > Login" · "Home > Doctors > Register" |
 | `/doctors/appointments` · `/today-appointments` · `/search-patients` · `/manage-availability` · `/profile` · `/consultation/:id` | "Home > Doctors > Appointments" · "… > Today's Appointments" · "… > Search Patients" · "… > Manage Availability" · "… > Update Profile" · "… > Consultation" |
-| `/support/login` · `/patient-appointments` · `/doctor-appointments` · `/doctor-availability` · `/profile` | "Home > Support Staff > Login" · "… > Patient Appointments" · "… > Doctor Appointments" · "… > Doctor Availability" · "… > Update Profile" |
+| `/support/login` · `/patient-appointments` · `/doctor-appointments` · `/doctor-availability` · `/needs-reschedule` · `/profile` | "Home > Support Staff > Login" · "… > Patient Appointments" · "… > Doctor Appointments" · "… > Doctor Availability" · "… > Needs Reschedule" · "… > Update Profile" |
 | `/admin/login` · `/admin/setup` · `/system-dashboard` · `/register-doctor` · `/register-patient` · `/register-admin` · `/register-support-staff` · `/reset-password` · `/deactivate` · `/clinic-settings` | "Home > Admin > Login" · "Home > Admin > First-Time Setup" · "… > System Dashboard" · "… > Register Doctor" · "… > Register Patient" · "… > Register Admin" · "… > Register Support Staff" · "… > Reset Password / Email" · "… > Deactivate" · "… > Clinic Settings" |
 | `/forgot-password` · `/reset-password` | "Home > Forgot Password" · "Home > Reset Password" |
 | anything else | "Home" |
@@ -239,6 +255,12 @@ Props: `target {id, doctorId, appointmentTime, doctorName?, patientName?, reason
   `alert("Appointment rescheduled to <date time>")` → close. Failure: server message (pink) inside the dialog,
   dialog stays open.
 
+### 6.6 `RangeBlockPanel` (`UI-CMP-RANGEBLOCK`)
+Props: `doctorId`, `accessToken`, `onChanged` (async; reloads the grid). The "Block or Unblock a Time Range" card,
+its preview/confirm dialog (`role="dialog"`, `aria-modal`) and the "Active Blocks" card, specified in
+[08](../features/08-doctor-availability.md) §4.1a–b. Embedded by `ManageAvailabilityPage` for doctors and support
+staff alike. Exports the pure helpers `rangeToUtc(form, tz)` and `rangeProblem(form, tz, now)`.
+
 ## 7. Accessibility
 
 - **UI-A11Y-01** Every input has a `<label for>`; icon-only buttons have `aria-label`s.
@@ -258,6 +280,12 @@ Props: `target {id, doctorId, appointmentTime, doctorName?, patientName?, reason
 - **F06-AC-05** Given a reschedule that fails with 409, Then the dialog stays open and shows
   "Requested slot is not available.".
 - **F06-AC-06** The access token is never written to `localStorage` or `sessionStorage`.
+- **F06-AC-07** Given support staff with 3 appointments in the Needs Reschedule queue, When opening the Support Staff
+  menu, Then the entry reads "Needs Reschedule (3)"; with none, "Needs Reschedule"; other roles never load the
+  queue.
+- **F06-AC-08** Given a signed-in user of a clinic with domain `healthylife.com`, Then the header shows the clinic
+  name beside the brand as a link to `https://healthylife.com` opening in a new tab, not overlapping the menu at
+  1440, 1280, 1024, 768, 600 or 390 px wide; signed out, no clinic name is shown.
 
 ## 9. Reference implementation
 

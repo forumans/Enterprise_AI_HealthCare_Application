@@ -19,7 +19,7 @@ Screens are specified separately and only call these endpoints.
                                               │                               │ consultation saved (D own)
                 cancel (P own, D own, S, A)   │                               ▼
                                               ▼                           COMPLETED (terminal)
-                                         CANCELLED (terminal; row soft-deleted; slot freed)
+                                         CANCELLED (terminal; row soft-deleted; slot released, BR-APT-04)
 ```
 
 - **BR-APT-01** New appointments start `SCHEDULED`.
@@ -27,9 +27,11 @@ Screens are specified separately and only call these endpoints.
   appointment's own doctor confirms (403 "Not allowed to change this appointment." otherwise).
 - **BR-APT-03** `COMPLETED` is set when the doctor saves a consultation ([12](12-consultation-clinical-records.md))
   through the generic status endpoint.
-- **BR-APT-04 Cancel** sets `status=CANCELLED`, `deleted_at=now`, `deleted_by=caller`; the trigger frees the slot
-  (`AVAILABLE`). The row is kept; cancelled rows don't count toward the partial unique indexes, so the slot can
-  be rebooked by anyone immediately.
+- **BR-APT-04 Cancel** sets `status=CANCELLED`, `deleted_at=now`, `deleted_by=caller`; the trigger releases the
+  slot by the release rule (F02 `DATA-TRG-02`): `AVAILABLE` when the slot has no `block_id`, so anyone can rebook
+  it immediately, but `BLOCKED` (keeping the block's reason) when the doctor has blocked that hour with a range
+  block ([08](08-doctor-availability.md) `BR-SLOT-19`). The row is kept; cancelled rows don't count toward the
+  partial unique indexes.
 - **BR-APT-05** Terminal states are never rescheduled, edited, confirmed or cancelled again. A cancelled
   appointment is soft-deleted, so every later call on it returns 404 "Appointment not found.".
 - **BR-APT-VIEW-01 Upcoming vs past.** An appointment is *upcoming* while `appointment_time + 60 min > now` and
@@ -70,8 +72,11 @@ Screens are specified separately and only call these endpoints.
 - **RESCHED-05** Lock the **same doctor's** slot at the new time; missing or not `AVAILABLE` →
   **409 "Requested slot is not available."**. Lock the old slot.
 - **RESCHED-06** In the same transaction: `appointment_time = new`, `slot_id = new slot`, new slot `BOOKED`, old
-  slot `AVAILABLE` (only if it was `BOOKED`). Patient, doctor, reason and status are unchanged. A unique-index
-  violation (patient busy at the new time) → **409 "Appointment conflicts with existing booking."**.
+  slot released by the release rule (only if it was `BOOKED`): `BLOCKED` if it has a `block_id`, else
+  `AVAILABLE` (`release_slot()`, same rule as the trigger). Patient, doctor, reason and status are unchanged. A
+  unique-index violation (patient busy at the new time) → **409 "Appointment conflicts with existing booking."**.
+  Because RESCHED-05 requires an `AVAILABLE` target, an appointment can't be moved into another hour of a blocked
+  range.
 - **RESCHED-07** Audit `appointments` UPDATE `{appointment_time: old}` → `{appointment_time: new}`. Response 200
   `{"id", "appointment_time": <new ISO>, "status"}`.
 - The DB trigger does not react to time changes, so the slot updates above are mandatory in code.
@@ -124,10 +129,14 @@ UpdateAppointmentStatusRequest { status: str }
 - **F07-AC-03** Given a slot another patient took a moment earlier, Then 409 "Requested slot is not available.".
 - **F07-AC-04** Given a patient with a 10 AM appointment with doctor A, When they book 10 AM with doctor B, Then
   409 "Appointment conflicts with existing booking.".
-- **F07-AC-05** Given a cancelled appointment, Then its slot is `AVAILABLE`, another patient can book it, and the
-  cancelled row still exists with `deleted_at` set.
-- **F07-AC-06** Given a reschedule, Then reason and status are unchanged, old slot `AVAILABLE`, new slot
-  `BOOKED`; rescheduling to the same time → 400 "Appointment is already at that time.".
+- **F07-AC-05** Given a cancelled appointment whose slot has no `block_id`, Then its slot is `AVAILABLE`, another
+  patient can book it, and the cancelled row still exists with `deleted_at` set.
+- **F07-AC-06** Given a reschedule, Then reason and status are unchanged, old slot `AVAILABLE` (or `BLOCKED` when it
+  has a `block_id`), new slot `BOOKED`; rescheduling to the same time → 400 "Appointment is already at that time.".
+- **F07-AC-14** Given an appointment flagged "Needs reschedule" (its slot has a `block_id`), When it is cancelled
+  or moved to an open hour outside the block, Then the old slot is `BLOCKED` with the block's reason and another
+  patient booking that hour gets 409 "Requested slot is not available."; moving it to another hour of the same
+  block → 409.
 - **F07-AC-07** Given a `COMPLETED` appointment, When rescheduled, Then 400 "Only scheduled or confirmed
   appointments can be rescheduled.".
 - **F07-AC-08** Given support staff booking without `patient_id`, Then 422 "patient_id is required.".
@@ -145,5 +154,6 @@ UpdateAppointmentStatusRequest { status: str }
 
 ## 10. Reference implementation
 
-`backend/app/api/routes/appointments.py`, `services/appointment_service.py`, `migrations/002_fix_sync_function.sql`,
-tests `tests/integration/test_core_flows.py`, `test_http_flows.py`.
+`backend/app/api/routes/appointments.py`, `services/appointment_service.py`, `services/availability_service.py`
+(`release_slot`), `migrations/010_schedule_blocks.sql` (trigger), tests `tests/integration/test_core_flows.py`,
+`test_http_flows.py`, `test_range_blocking.py`.

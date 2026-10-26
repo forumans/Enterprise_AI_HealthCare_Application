@@ -20,9 +20,14 @@ shown in the browser use **clinic time**, whatever zone the server or the viewer
   16 slots/day, 7 days/week, 60 minutes each. Constants `WORKDAY_FIRST_SLOT_HOUR = 8`,
   `WORKDAY_LAST_SLOT_HOUR = 23`, `SLOT_DURATION_MINUTES = 60` defined once per tier and kept in sync.
 - **BR-TIME-06** When a clinic's zone changes, future open and blocked slots move to the same local date and hour
-  in the new zone; booked slots keep their instant ([21](../features/21-clinic-settings-and-tenants.md)).
-- **BR-TIME-07** Booking horizon shown to users: 5 weeks (current week + 4). Slot changes: now … now+30 days.
+  in the new zone (keeping their range block); booked slots keep their instant, and range blocks move with their
+  slots ([21](../features/21-clinic-settings-and-tenants.md)).
+- **BR-TIME-07** Booking horizon shown to users: 5 weeks (current week + 4). Slot changes: now … now+30 days;
+  range block/unblock: up to now+180 days.
   Default generation: next 7 clinic days ([08](../features/08-doctor-availability.md)).
+- **BR-TIME-08** A range block/unblock is walked clinic-local day by day, so across a daylight-saving change each
+  local office hour in the range is affected exactly once (`office_hour_slots_in_range`,
+  [08](../features/08-doctor-availability.md) `BR-SLOT-12`).
 
 ## 2. Backend helpers (`app/core/timeutils.py`)
 
@@ -40,6 +45,7 @@ shown in the browser use **clinic time**, whatever zone the server or the viewer
 | `clinic_week_bounds(anchor, tz)` | Monday-to-Monday local range containing `anchor`, as UTC |
 | `same_wall_clock(dt, old_tz, new_tz)` | instant showing the same local date/time in `new_tz` |
 | `default_slot_times(tz, now=None, days=7)` | for `d` in 0..days-1, for hour 8..23: `datetime(y,m,d,hour,tzinfo=tz).astimezone(UTC)`, keeping only slots strictly after `now` |
+| `office_hour_slots_in_range(start, end, tz)` | office-hour slot starts (8..23 local) in the half-open `[start, end)`, walking clinic-local dates from `start`'s date to `end`'s date; `[]` when `end <= start` |
 
 Never build naive datetimes for queries.
 

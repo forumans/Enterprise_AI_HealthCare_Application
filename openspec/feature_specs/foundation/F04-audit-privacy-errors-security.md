@@ -37,6 +37,9 @@ table_name, record_id)` writes `action_type="READ"`, `new_data={"viewer_role": <
 | Edit reason | appointments | UPDATE | appointment | `{notes:old}` → `{notes:new}` |
 | Cancel | appointments | DELETE | appointment | `{status:old}` → `{status:"CANCELLED"}` |
 | Slot add / block / unblock / delete | doctor_availability | INSERT / UPDATE / DELETE | slot | `{status:old}` → `{status, slot_time}` (DELETE: new = null) |
+| Range block applied | schedule_blocks | INSERT | block | `{doctor_id, start, end, reason_category, <preview counts>, slot_ids, flagged_appointment_ids}` (one row per action; none when nothing new was blocked; no per-slot rows) |
+| Range unblock applied | schedule_blocks | UPDATE | **doctor** (an unblock can span several blocks, or none) | `{doctor_id, start, end, <preview counts>, block_ids, released_block_ids, slot_ids, unflagged_appointment_ids}` |
+| Appointment flagged / unflagged by a range action | appointments | UPDATE | appointment | `{needs_reschedule:!x}` → `{needs_reschedule:x, block_id}` (ids only: no patient name, phone or reason note) |
 | Medical record created | medical_records | INSERT | record | `{appointment_id}` (no clinical text) |
 | Prescription created | prescriptions | INSERT | prescription | `{medical_record_id}` |
 | Document uploaded | patient_documents | INSERT | document | `{document_name, file_path}` or `{patient_id, document_name}` |

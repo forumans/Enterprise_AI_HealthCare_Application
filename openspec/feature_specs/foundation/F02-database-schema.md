@@ -135,6 +135,25 @@ CREATE TABLE admins (
 );
 CREATE INDEX idx_admins_tenant ON admins (tenant_id);
 
+CREATE TABLE schedule_blocks (                             -- migration 010; one row = one range block
+    id               uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id        uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    doctor_id        uuid NOT NULL REFERENCES doctors(id) ON DELETE CASCADE,
+    start_time       timestamptz NOT NULL,                 -- half-open [start_time, end_time), UTC
+    end_time         timestamptz NOT NULL,
+    reason_category  varchar(32) NOT NULL,                 -- VACATION | CONFERENCE | SICK | PERSONAL | ADMINISTRATIVE | OTHER
+    reason_note      varchar(500),                         -- required for OTHER
+    created_by       uuid REFERENCES users(id),
+    created_at       timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    released_at      timestamptz,                          -- set when no future slot references it any more
+    released_by      uuid REFERENCES users(id),
+    CONSTRAINT schedule_blocks_reason_category_check
+        CHECK (reason_category IN ('VACATION', 'CONFERENCE', 'SICK', 'PERSONAL', 'ADMINISTRATIVE', 'OTHER')),
+    CONSTRAINT schedule_blocks_range_check CHECK (end_time > start_time)
+);                                                         -- never deleted by the app (only by tenant cascade)
+CREATE INDEX idx_schedule_blocks_doctor ON schedule_blocks (doctor_id, start_time);
+CREATE INDEX idx_schedule_blocks_tenant ON schedule_blocks (tenant_id);
+
 CREATE TABLE doctor_availability (                         -- one row = one hourly slot; hard-deleted
     id           uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id    uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -142,11 +161,14 @@ CREATE TABLE doctor_availability (                         -- one row = one hour
     slot_time    timestamptz NOT NULL,                     -- start of the hour, UTC
     status       slot_status NOT NULL DEFAULT 'AVAILABLE',
     block_reason text,                                     -- set when blocked, cleared when unblocked
+    block_id     uuid REFERENCES schedule_blocks(id) ON DELETE SET NULL,  -- migration 010: the doctor wants
+                                                           -- this hour blocked; BOOKED + block_id = needs reschedule
     created_at   timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (doctor_id, slot_time),
     CONSTRAINT unique_slot_tenant UNIQUE (id, tenant_id)   -- target of the composite FK below
 );
 CREATE INDEX idx_availability_doctor_time ON doctor_availability (doctor_id, slot_time);
+CREATE INDEX idx_doctor_availability_block ON doctor_availability (doctor_id, block_id);
 
 CREATE TABLE appointments (
     id               uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -245,24 +267,32 @@ CREATE INDEX idx_rate_limit_events_created ON rate_limit_events (created_at);
 
 ### 5.1 `sync_doctor_availability` (AFTER INSERT OR UPDATE OR DELETE ON appointments, FOR EACH ROW)
 
+As rewritten by migration 010 (the release rule, `DATA-TRG-02`):
+
 ```sql
 CREATE OR REPLACE FUNCTION sync_doctor_availability() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    IF TG_OP = 'INSERT' THEN
+    IF TG_OP = 'INSERT' THEN                               -- book; block_id is kept
         UPDATE doctor_availability SET status = 'BOOKED'
          WHERE doctor_id = NEW.doctor_id AND slot_time = NEW.appointment_time;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF NEW.status = 'CANCELLED' THEN
-            UPDATE doctor_availability SET status = 'AVAILABLE'
-             WHERE doctor_id = NEW.doctor_id AND slot_time = NEW.appointment_time;
+    IF TG_OP = 'UPDATE' THEN                               -- the change INTO CANCELLED releases the slot
+        IF NEW.status = 'CANCELLED' AND OLD.status IS DISTINCT FROM 'CANCELLED' THEN
+            UPDATE doctor_availability
+               SET status = CASE WHEN block_id IS NOT NULL THEN 'BLOCKED' ELSE 'AVAILABLE' END::slot_status,
+                   block_reason = CASE WHEN block_id IS NOT NULL THEN block_reason END
+             WHERE doctor_id = NEW.doctor_id AND slot_time = NEW.appointment_time AND status = 'BOOKED';
         END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'DELETE' THEN
-        UPDATE doctor_availability SET status = 'AVAILABLE'
-         WHERE doctor_id = OLD.doctor_id AND slot_time = OLD.appointment_time;
+    IF TG_OP = 'DELETE' THEN                               -- deleting a live appointment releases the slot
+        IF OLD.status IS DISTINCT FROM 'CANCELLED' THEN
+            UPDATE doctor_availability
+               SET status = CASE WHEN block_id IS NOT NULL THEN 'BLOCKED' ELSE 'AVAILABLE' END::slot_status,
+                   block_reason = CASE WHEN block_id IS NOT NULL THEN block_reason END
+             WHERE doctor_id = OLD.doctor_id AND slot_time = OLD.appointment_time AND status = 'BOOKED';
+        END IF;
         RETURN OLD;
     END IF;
     RETURN NULL;
@@ -271,8 +301,17 @@ CREATE TRIGGER trg_sync_availability AFTER INSERT OR UPDATE OR DELETE ON appoint
     FOR EACH ROW EXECUTE FUNCTION sync_doctor_availability();
 ```
 
+Before 010 (migration 002) cancel and delete always set the slot `AVAILABLE`; `010_schedule_blocks_rollback.sql`
+restores that version.
+
 - **DATA-TRG-01** The trigger does **not** react to a change of `appointment_time`. Rescheduling SHALL free the
-  old slot and book the new one in application code ([07](../features/07-appointment-lifecycle.md)).
+  old slot (by the release rule) and book the new one in application code
+  ([07](../features/07-appointment-lifecycle.md)).
+- **DATA-TRG-02 Release rule.** A slot freed by cancelling, deleting or moving its appointment becomes `BLOCKED`
+  (keeping its `block_reason`) when it has a `block_id`, and `AVAILABLE` (reason cleared) otherwise — in the same
+  transaction, so a blocked hour is never bookable in between ([08](../features/08-doctor-availability.md)
+  `BR-SLOT-19`). Only a `BOOKED` slot is released, and only on the change into `CANCELLED`, so editing or deleting
+  an already-cancelled appointment never frees a slot someone has booked since.
 - Booking also sets the slot `BOOKED` in application code in the same transaction (idempotent with the trigger).
 
 ### 5.2 `audit_trigger_function` (database-level full-row trail)
@@ -297,7 +336,8 @@ END $$;
 ```
 
 Attached `AFTER INSERT OR DELETE OR UPDATE … FOR EACH ROW` as `audit_<table>` on: `users`, `patients`, `doctors`,
-`support_staff`, `appointments`, `medical_records`, `prescriptions`, `pharmacies`, `patient_documents`
+`support_staff`, `appointments`, `medical_records`, `prescriptions`, `pharmacies`, `patient_documents`,
+`schedule_blocks` (migration 010)
 (trigger on `patient_documents` is named `audit_documents`). Not on `tenants`, `admins`,
 `doctor_availability` or `audit_logs`. This trail is in addition to the application audit entries (F04).
 
@@ -308,7 +348,8 @@ CREATE OR REPLACE FUNCTION app_current_tenant() RETURNS uuid LANGUAGE sql STABLE
 $$ SELECT NULLIF(current_setting('app.current_tenant', true), '')::uuid $$;
 
 -- For each of: users, patients, doctors, support_staff, admins, doctor_availability, appointments,
---              medical_records, prescriptions, pharmacies, patient_documents, audit_logs
+--              medical_records, prescriptions, pharmacies, patient_documents, audit_logs,
+--              schedule_blocks (added by migration 010)
 ALTER TABLE <t> ENABLE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON <t>
     USING (tenant_id = app_current_tenant()) WITH CHECK (tenant_id = app_current_tenant());
@@ -368,6 +409,7 @@ The app connects as `healthcare_user` (DML only). Migrations run as the owner.
 | `007_row_level_security.sql` | RLS policies + the cross-tenant functions (§6) | Requires 003, 005 |
 | `008_add_tenant_timezone.sql` | `tenants.timezone varchar(64) NOT NULL DEFAULT <migration.clinic_timezone or America/New_York>`; validates the zone with `now() AT TIME ZONE v_zone` first | Apply before the backend that reads it |
 | `009_rate_limits_and_gender_values.sql` (+ `_rollback`) | Create `rate_limit_events` (shared rate-limit counters, F04 §5) with grants to the app user; rewrite `patients.gender` values like "Male" / "prefer not to say" to the enum values | Either deploy order; without it the backend counts in memory |
+| `010_schedule_blocks.sql` (+ `_rollback`) | Create `schedule_blocks` (RLS `tenant_isolation`, grants to the app user, `audit_schedule_blocks` trigger); add `doctor_availability.block_id` + index `(doctor_id, block_id)`; rewrite `sync_doctor_availability` with the release rule (§5.1) | Apply **before** the backend that reads `block_id`; behaviour is unchanged until the first range block. Rollback restores the 002 trigger and drops the column and table |
 
 - **DATA-MIG-01** Migrations are numbered `NNN_description.sql`, idempotent (`IF NOT EXISTS`, guarded `DO`
   blocks), wrapped in `BEGIN … COMMIT`, and run with `psql -v ON_ERROR_STOP=1`.
@@ -378,7 +420,8 @@ The app connects as `healthcare_user` (DML only). Migrations run as the owner.
   "Support staff accounts aren't available yet: the database needs migration 005_add_support_staff_role.sql.").
 - **DATA-MIG-04** A schema snapshot SQL (`aws_env_spin_up/scripts/schema_snapshot.sql`) and comparer
   (`compare_schema.py`) SHALL cover tables, columns, enums, indexes, triggers, functions and RLS policies so the
-  cloud and local schemas can be diffed.
+  cloud and local schemas can be diffed. The snapshot also lists `migrations_applied` (005, 007–010, each
+  recognised by an object it creates), so the comparer shows which migrations each side is missing.
 
 ## 9. Seed and reference data
 
@@ -394,9 +437,12 @@ The app connects as `healthcare_user` (DML only). Migrations run as the owner.
 
 | Slot status | Meaning | Set by |
 |-------------|---------|--------|
-| `AVAILABLE` | Open for booking | default generation; add / unblock; cancellation (trigger); reschedule (old slot) |
+| `AVAILABLE` | Open for booking | default generation; add / unblock (single or range); cancellation (trigger) or reschedule (old slot) of a slot **without** `block_id` |
 | `BOOKED` | Held by a live appointment | booking (code + trigger); reschedule (new slot) |
-| `BLOCKED` | Not bookable, optional `block_reason` | doctor or support staff |
+| `BLOCKED` | Not bookable, optional `block_reason` | doctor or support staff (single slot or range block); cancellation or reschedule of a slot **with** `block_id` (DATA-TRG-02) |
+
+A `BOOKED` slot with a `block_id` is an appointment that **needs rescheduling** (the doctor blocked the hour after
+it was booked); the flag is derived, never stored on the appointment ([16](../features/16-support-appointments.md)).
 
 | Appointment status | Meaning |
 |--------------------|---------|

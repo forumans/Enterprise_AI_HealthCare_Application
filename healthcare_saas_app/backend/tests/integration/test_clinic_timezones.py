@@ -29,7 +29,7 @@ from backend.app.core import rate_limit, timeutils
 from backend.app.core.dependencies import get_current_identity
 from backend.app.core.security import hash_password
 from backend.app.models import Doctor
-from backend.app.services.availability_service import ensure_default_slots
+from backend.app.services.availability_service import apply_block, ensure_default_slots, plan_range_change
 from backend.tests.integration._pg import CLINIC_TZ, FAKE_HTTP, TempDatabase, http_from, require_pg, seed_clinic
 
 NY = ZoneInfo(CLINIC_TZ)
@@ -188,6 +188,38 @@ class ClinicTimeZoneTests(unittest.IsolatedAsyncioTestCase):
         async with self.sessions() as s:
             info = await get_current_tenant(identity=self.identity("admin", "ADMIN"), db=s)
         self.assertEqual(info["timezone"], "America/Los_Angeles")
+
+    async def test_changing_the_zone_keeps_range_blocks_and_flagged_hours_blocked(self):
+        day = timeutils.clinic_today(NY) + timedelta(days=2)
+        async with self.sessions() as s:
+            await ensure_default_slots(s, (await s.execute(select(Doctor).where(Doctor.id == self.ids["doctor"]))).scalar_one(), NY)
+        flagged_at, plain_at = at(day, 14, NY), at(day, 21, NY)
+        for when, who in ((flagged_at, "patient1"), (plain_at, "patient2")):
+            payload = CreateAppointmentRequest(doctor_id=self.ids["doctor"], slot=when.isoformat(), reason="Regular checkup")
+            async with self.sessions() as s:
+                await create_appointment(payload=payload, identity=self.identity(who, "PATIENT"), db=s)
+        async with self.sessions() as s:  # block 9 AM-5 PM Eastern over the 2 PM appointment
+            doctor = (await s.execute(select(Doctor).where(Doctor.id == self.ids["doctor"]))).scalar_one()
+            plan = await plan_range_change(s, doctor, NY, at(day, 9, NY), at(day, 17, NY), "block")
+            block = await apply_block(
+                s, doctor, NY, at(day, 9, NY), at(day, 17, NY), category="CONFERENCE", note=None, fingerprint=plan.fingerprint, actor=None
+            )
+            await s.commit()
+
+        async with self.sessions() as s:
+            await update_current_tenant(payload=UpdateTenantRequest(timezone="America/Los_Angeles"), identity=self.identity("admin", "ADMIN"), db=s)
+
+        rows = await self.fetch("SELECT slot_time, status, block_id, block_reason FROM doctor_availability WHERE doctor_id = $1", self.ids["doctor"])
+        on_day = {r["slot_time"].astimezone(LA).hour: r for r in rows if r["slot_time"].astimezone(LA).date() == day}
+        # 9 AM-5 PM Pacific is still blocked under the same block; the flagged visit (11 AM Pacific) stays booked
+        for hour in range(9, 17):
+            self.assertEqual(str(on_day[hour]["block_id"]), block["block_id"], hour)
+            self.assertEqual(on_day[hour]["status"], "BOOKED" if hour == 11 else "BLOCKED", hour)
+        self.assertEqual(on_day[14]["block_reason"], "Conference")  # the flagged slot's reopened hour
+        # The unflagged booked slot's hour (9 PM) reopens as AVAILABLE, as before
+        self.assertEqual((on_day[21]["status"], on_day[21]["block_id"]), ("AVAILABLE", None))
+        moved = await self.fetch("SELECT start_time, end_time FROM schedule_blocks WHERE id = $1", block["block_id"])
+        self.assertEqual((moved[0]["start_time"], moved[0]["end_time"]), (at(day, 9, LA), at(day, 17, LA)))
 
     async def test_unknown_zones_are_rejected(self):
         for zone in ("Mars/Olympus_Mons", "EST-ish", " "):

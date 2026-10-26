@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import Appointment, Doctor, DoctorAvailability, User
+from .availability_service import release_slot
 
 
 async def book_appointment(
@@ -92,7 +93,9 @@ async def reschedule_appointment(
     """Move an appointment to another slot of the same doctor, keeping every other detail.
 
     The sync_doctor_availability trigger only reacts to inserts, deletes and cancellations, so a
-    time change has to free the old slot and book the new one here. Returns the previous time.
+    time change has to free the old slot (by the release rule) and book the new one here. Only an
+    AVAILABLE slot can be the target, so an appointment can't move into a blocked hour. Returns the
+    previous time.
     """
 
     if new_time == appointment.appointment_time:
@@ -132,7 +135,7 @@ async def reschedule_appointment(
     appointment.slot_id = new_slot.id
     new_slot.status = "BOOKED"
     if old_slot is not None and old_slot.status == "BOOKED":
-        old_slot.status = "AVAILABLE"
+        release_slot(old_slot)  # stays BLOCKED if a range block wants the old hour
 
     try:
         await db.flush()

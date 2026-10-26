@@ -10,6 +10,7 @@ from backend.app.core.timeutils import (
     clinic_zone,
     default_slot_times,
     is_valid_timezone,
+    office_hour_slots_in_range,
     parse_client_datetime,
     same_wall_clock,
     to_utc,
@@ -139,6 +140,45 @@ class ClinicZoneTests(unittest.TestCase):
         self.assertEqual(clinic_zone("Europe/London").key, "Europe/London")
         self.assertEqual(clinic_zone("not-a-zone").key, DEFAULT_CLINIC_TIMEZONE)
         self.assertEqual(clinic_zone(None).key, DEFAULT_CLINIC_TIMEZONE)
+
+
+class OfficeHourSlotsInRangeTests(unittest.TestCase):
+    @staticmethod
+    def ny(day: int, hour: int, month: int = 11) -> datetime:
+        return datetime(2026, month, day, hour, tzinfo=NEW_YORK).astimezone(UTC)
+
+    def local_hours(self, slots):
+        return [(s.astimezone(NEW_YORK).day, s.astimezone(NEW_YORK).hour) for s in slots]
+
+    def test_end_is_excluded(self):
+        slots = office_hour_slots_in_range(self.ny(3, 9), self.ny(3, 12), NEW_YORK)
+        self.assertEqual(self.local_hours(slots), [(3, 9), (3, 10), (3, 11)])
+
+    def test_multi_day_range_keeps_to_office_hours(self):
+        slots = office_hour_slots_in_range(self.ny(3, 14), self.ny(5, 10), NEW_YORK)
+        expected = [(3, h) for h in range(14, 24)] + [(4, h) for h in range(8, 24)] + [(5, 8), (5, 9)]
+        self.assertEqual(self.local_hours(slots), expected)
+
+    def test_hours_outside_office_hours_are_never_returned(self):
+        self.assertEqual(office_hour_slots_in_range(self.ny(3, 0), self.ny(3, 8), NEW_YORK), [])
+        slots = office_hour_slots_in_range(self.ny(3, 22), self.ny(4, 9), NEW_YORK)
+        self.assertEqual(self.local_hours(slots), [(3, 22), (3, 23), (4, 8)])
+
+    def test_empty_or_reversed_range(self):
+        self.assertEqual(office_hour_slots_in_range(self.ny(3, 9), self.ny(3, 9), NEW_YORK), [])
+        self.assertEqual(office_hour_slots_in_range(self.ny(3, 12), self.ny(3, 9), NEW_YORK), [])
+
+    def test_each_office_hour_once_across_the_autumn_dst_change(self):
+        # DST ends Sunday 2026-11-01 in America/New_York; Nov 1 8 AM -> Nov 2 8 AM
+        slots = office_hour_slots_in_range(self.ny(1, 8), self.ny(2, 8), NEW_YORK)
+        self.assertEqual(self.local_hours(slots), [(1, h) for h in range(8, 24)])
+        self.assertEqual(len(set(slots)), 16)
+        self.assertEqual(slots[0], datetime(2026, 11, 1, 13, 0, tzinfo=UTC))  # 8 AM EST
+        # Across Oct 31 -> Nov 1 the UTC offset changes but each local hour still appears once
+        slots = office_hour_slots_in_range(self.ny(31, 8, month=10), self.ny(2, 0), NEW_YORK)
+        self.assertEqual(len(slots), 32)
+        self.assertEqual(slots[0], datetime(2026, 10, 31, 12, 0, tzinfo=UTC))  # 8 AM EDT
+        self.assertTrue(all(s.tzinfo is not None and s.utcoffset() == timedelta(0) for s in slots))
 
 
 if __name__ == "__main__":

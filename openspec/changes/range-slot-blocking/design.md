@@ -54,7 +54,7 @@ reference the block; `released_at` is set when that count reaches zero, inside t
 Release = `status := CASE WHEN block_id IS NOT NULL THEN 'BLOCKED' ELSE 'AVAILABLE' END`, and
 `block_reason` keeps the block's reason when `BLOCKED`.
 
-- The trigger is rewritten in migration 009 with this rule for cancel and delete.
+- The trigger is rewritten in migration 010 with this rule for cancel and delete.
 - A `release_slot(slot)` helper in `availability_service.py` is used by `reschedule_appointment`.
 - `keep_slot_hours_in_new_zone` carries `block_id`/`block_reason` for moved slots and applies the rule to the
   reopened hour of a booked slot.
@@ -155,13 +155,13 @@ added to the `audit_trigger_function` table list for the DB-level safety net.
 
 ## Migration Plan
 
-1. Add `backend/migrations/009_schedule_blocks.sql` and `009_schedule_blocks_rollback.sql`: create
+1. Add `backend/migrations/010_schedule_blocks.sql` and `010_schedule_blocks_rollback.sql`: create
    `schedule_blocks` with RLS and grants (as in 006/007), add `doctor_availability.block_id` + index, replace
    `sync_doctor_availability`, add `schedule_blocks` to the audit trigger. Existing rows get `block_id = NULL`,
    so behavior is unchanged until a range block is made.
 2. Update `aws_env_spin_up/scripts/schema_snapshot.sql` / `compare_schema.py` for the new table, column and
    policy.
-3. Test locally; the user applies 009 to RDS, then deploys backend and frontend (backend code reads
+3. Test locally; the user applies 010 to RDS, then deploys backend and frontend (backend code reads
    `block_id`, so the migration goes first).
 4. Rollback: run the rollback script (restores the 002 trigger, drops the column and table) and redeploy the
    previous build. Slots blocked by ranges stay `BLOCKED` with their reason; flagged booked slots simply lose

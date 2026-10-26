@@ -55,7 +55,7 @@ contact-attempt tracking in the work queue.
 ### Modified Capabilities
 
 None as OpenSpec capability folders. The application's requirements live in `openspec/feature_specs/` (the
-source of truth), which this change updates instead: `foundation/F02` (new table, column, trigger, migration 009),
+source of truth), which this change updates instead: `foundation/F02` (new table, column, trigger, migration 010),
 `foundation/F04` (audit events), `foundation/F06` (range card, preview dialog, grid style, menu entry),
 `foundation/F07` (test plan), `features/07-appointment-lifecycle` (slot release on cancel/reschedule),
 `features/08-doctor-availability` (`BR-SLOT-04/05/06`, range rules, active blocks), `features/16-support-appointments`
@@ -63,7 +63,7 @@ source of truth), which this change updates instead: `foundation/F02` (new table
 
 ## Impact
 
-- **Database**: migration `009_schedule_blocks.sql` (+ rollback) — new `schedule_blocks` table with
+- **Database**: migration `010_schedule_blocks.sql` (+ rollback) — new `schedule_blocks` table with
   row-level security, new `doctor_availability.block_id` column and index, rewritten `sync_doctor_availability`
   trigger. Schema snapshot/compare scripts in `aws_env_spin_up/scripts/` updated.
 - **Backend**: `backend/app/models/` (new `ScheduleBlock`, `block_id` on `DoctorAvailability`),
